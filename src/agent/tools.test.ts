@@ -36,6 +36,8 @@ const m = vi.hoisted(() => ({
   suggestSavedPlacesOnRoute: vi.fn(),
   generateRouteComparisonMap: vi.fn(),
   isStaticMapsConfigured: vi.fn(),
+  getWeather: vi.fn(),
+  isWeatherConfigured: vi.fn(),
   setActiveTripId: vi.fn(),
 }));
 
@@ -102,6 +104,10 @@ vi.mock("../services/googleRoutes", () => ({
 vi.mock("../services/staticMaps", () => ({
   generateRouteComparisonMap: m.generateRouteComparisonMap,
   isStaticMapsConfigured: m.isStaticMapsConfigured,
+}));
+vi.mock("../services/weather", () => ({
+  getWeather: m.getWeather,
+  isWeatherConfigured: m.isWeatherConfigured,
 }));
 vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
 
@@ -181,8 +187,14 @@ describe("toolDefinitions", () => {
         "replace_memory",
         "delete_memory",
         "export_itinerary",
+        "get_weather",
       ]),
     );
+  });
+
+  it("limits get_weather to explicit user weather requests", () => {
+    const getWeather = toolFunction("get_weather");
+    expect(getWeather.description).toContain("Only use when the user explicitly asks");
   });
 
   it("restricts place categories to the supported values", () => {
@@ -1072,6 +1084,65 @@ describe("export_itinerary", () => {
     await toolHandlers.export_itinerary(c, { format: "csv" });
     expect(m.exportItineraryCsv).toHaveBeenCalled();
     expect(c.exports[0]).toContain(".csv");
+  });
+});
+
+describe("get_weather", () => {
+  it("returns an error when weather is not configured", async () => {
+    m.isWeatherConfigured.mockReturnValueOnce(false);
+    const result = await toolHandlers.get_weather(ctx(7), { location: "Moab" });
+    expect(result).toEqual({
+      ok: false,
+      error: "GOOGLE_MAPS_API_KEY is not configured for weather.",
+    });
+    expect(m.getWeather).not.toHaveBeenCalled();
+  });
+
+  it("uses the active trip destination when location is omitted", async () => {
+    m.isWeatherConfigured.mockReturnValueOnce(true);
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Utah" });
+    m.getWeather.mockResolvedValueOnce({
+      location: { label: "Utah", latitude: 39.3, longitude: -111.6 },
+      time_zone: "America/Denver",
+      units_system: "METRIC",
+      current: { description: "Sunny", temperature: "22°C" },
+      forecast_days: [],
+    });
+
+    const result = await toolHandlers.get_weather(ctx(7), { forecast_days: 0 });
+    expect(m.getWeather).toHaveBeenCalledWith({
+      location: "Utah",
+      latitude: null,
+      longitude: null,
+      forecastDays: 0,
+      unitsSystem: "METRIC",
+    });
+    expect(result).toMatchObject({ ok: true, current: { description: "Sunny" } });
+  });
+
+  it("passes an explicit location and forecast length", async () => {
+    m.isWeatherConfigured.mockReturnValueOnce(true);
+    m.getWeather.mockResolvedValueOnce({
+      location: { label: "Paris", latitude: 48.85, longitude: 2.35 },
+      time_zone: "Europe/Paris",
+      units_system: "IMPERIAL",
+      current: null,
+      forecast_days: [{ date: "2026-06-03", description: "Rain", high: "70°F", low: "55°F" }],
+    });
+
+    await toolHandlers.get_weather(ctx(null), {
+      location: "Paris",
+      forecast_days: 2,
+      units_system: "IMPERIAL",
+    });
+
+    expect(m.getWeather).toHaveBeenCalledWith({
+      location: "Paris",
+      latitude: null,
+      longitude: null,
+      forecastDays: 2,
+      unitsSystem: "IMPERIAL",
+    });
   });
 });
 

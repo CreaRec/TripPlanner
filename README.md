@@ -36,7 +36,7 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
 - Docker + Docker Compose
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - An OpenAI API key
-- Optional: a Google Maps Platform key with Places API (New) enabled
+- Optional: a Google Maps Platform key (Places API (New), Routes, Static Maps, Weather as needed)
 
 ## Setup
 
@@ -51,8 +51,9 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
    `ALLOWED_TELEGRAM_IDS` (comma-separated for multiple people).
 
    To enrich saved places with addresses, coordinates, maps links, websites, hours/ratings, and
-   booking or ticket advice, set `GOOGLE_MAPS_API_KEY`. In Google Cloud, restrict the key to
-   Places API (New), use minimal field masks, and set a small budget alert.
+   booking or ticket advice, set `GOOGLE_MAPS_API_KEY`. In Google Cloud, enable the APIs you
+   need (Places, Routes, Static Maps, Weather), restrict the key, and set a small budget alert.
+   Weather is fetched only when you ask the bot about conditions or a forecast.
 
 2. Start everything locally (boots Postgres in Docker, applies Prisma migrations, starts the bot in watch mode):
 

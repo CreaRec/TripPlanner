@@ -19,6 +19,11 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("Do not substitute a saved place candidate");
   });
 
+  it("fetches weather only when the user asks", () => {
+    expect(SYSTEM_PROMPT).toContain("Only call get_weather when the user explicitly asks");
+    expect(SYSTEM_PROMPT).toContain("Do not fetch weather proactively");
+  });
+
   it("does not claim a map is attached unless generation succeeded", () => {
     expect(SYSTEM_PROMPT).toContain("Only say a comparison map is attached");
     expect(SYSTEM_PROMPT).toContain("comparison_map_generated=true");
