@@ -13,6 +13,7 @@ import {
   savePendingDestructiveAction,
 } from "../services/messages";
 import { listReservations } from "../services/reservations";
+import { listSavedPlaces } from "../services/savedPlaces";
 import { getActiveTripId } from "../services/users";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
@@ -31,6 +32,7 @@ const DESTRUCTIVE_TOOL_NAMES = new Set([
   "clear_day",
   "delete_day",
   "delete_memory",
+  "delete_interesting_place",
 ]);
 
 function sortedJson(value: unknown): string {
@@ -96,18 +98,37 @@ function fromDateTime(value: Date | null | undefined): string | null {
   return value.toISOString().replace(/:00\.000Z$/, "Z");
 }
 
+async function savedPlacesContextLines(telegramId: number): Promise<string[]> {
+  const savedPlaces = await listSavedPlaces(telegramId, { status: "want_to_visit", limit: 8 });
+  if (savedPlaces.length === 0) return [];
+  return [
+    "\nGeneral interesting places:",
+    ...savedPlaces.map((p) => {
+      const location = [p.address, p.latitude !== null && p.longitude !== null ? `${p.latitude},${p.longitude}` : null]
+        .filter(Boolean)
+        .join(" | ");
+      return `- [${p.id}] ${p.name}${p.category ? ` (${p.category})` : ""}${location ? ` - ${location}` : ""}`;
+    }),
+  ];
+}
+
 async function buildContextBlock(
   ctx: AgentContext,
   userText: string,
   pendingDelete: PendingDestructiveAction | null,
 ): Promise<string> {
   if (ctx.activeTripId === null) {
-    return "There is no active trip yet. If the user wants to plan, create one.";
+    const lines = [
+      "There is no active trip selected.",
+      "If the user wants to plan a trip, create one. If they only want to save a general interesting place, use save_interesting_place without creating a trip.",
+      ...(await savedPlacesContextLines(ctx.telegramId)),
+    ];
+    return lines.join("\n");
   }
   const trip = await getTrip(ctx.telegramId, ctx.activeTripId);
   if (!trip) return "No active trip found.";
 
-  const [memories, itinerary, reservations] = await Promise.all([
+  const [memories, itinerary, reservations, savedPlaceLines] = await Promise.all([
     searchMemories({
       telegramId: ctx.telegramId,
       tripId: ctx.activeTripId,
@@ -116,6 +137,7 @@ async function buildContextBlock(
     }),
     getItinerary(ctx.activeTripId),
     listReservations(ctx.activeTripId),
+    savedPlacesContextLines(ctx.telegramId),
   ]);
 
   const lines: string[] = [];
@@ -153,6 +175,8 @@ async function buildContextBlock(
       lines.push(`- [${r.type}] ${timing}${r.title}${provider}${confirmation}`);
     }
   }
+
+  lines.push(...savedPlaceLines);
 
   if (pendingDelete) {
     lines.push("\nPending destructive action awaiting explicit user confirmation:");

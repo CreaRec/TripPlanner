@@ -12,8 +12,10 @@ const h = vi.hoisted(() => ({
   getItinerary: vi.fn(),
   searchMemories: vi.fn(),
   listReservations: vi.fn(),
+  listSavedPlaces: vi.fn(),
   extractMemories: vi.fn(),
   createTripHandler: vi.fn(),
+  saveInterestingPlaceHandler: vi.fn(),
   deletePlaceHandler: vi.fn(),
 }));
 
@@ -32,10 +34,15 @@ vi.mock("../services/trips", () => ({ getTrip: h.getTrip }));
 vi.mock("../services/itinerary", () => ({ getItinerary: h.getItinerary }));
 vi.mock("../services/memories", () => ({ searchMemories: h.searchMemories }));
 vi.mock("../services/reservations", () => ({ listReservations: h.listReservations }));
+vi.mock("../services/savedPlaces", () => ({ listSavedPlaces: h.listSavedPlaces }));
 vi.mock("./memory", () => ({ extractMemories: h.extractMemories }));
 vi.mock("./tools", () => ({
   toolDefinitions: [],
-  toolHandlers: { create_trip: h.createTripHandler, delete_place: h.deletePlaceHandler },
+  toolHandlers: {
+    create_trip: h.createTripHandler,
+    save_interesting_place: h.saveInterestingPlaceHandler,
+    delete_place: h.deletePlaceHandler,
+  },
 }));
 
 import { runAgent } from "./runAgent";
@@ -45,6 +52,7 @@ beforeEach(() => {
   // extractMemories is fire-and-forget; runAgent calls .catch() on the result.
   h.extractMemories.mockResolvedValue(undefined);
   h.getPendingDestructiveAction.mockResolvedValue(null);
+  h.listSavedPlaces.mockResolvedValue([]);
 });
 
 function assistant(content: string) {
@@ -95,6 +103,43 @@ describe("runAgent", () => {
     expect(h.createTripHandler).toHaveBeenCalledWith(expect.anything(), { title: "Alps" });
     expect(result.reply).toBe("All set!");
     expect(result.files).toEqual(["/tmp/plan.pdf"]);
+  });
+
+  it("can save a general interesting place without creating a trip", async () => {
+    h.getActiveTripId.mockResolvedValueOnce(null);
+    h.recentMessages.mockResolvedValueOnce([]);
+    h.saveInterestingPlaceHandler.mockResolvedValueOnce({ ok: true, saved_place_id: 77 });
+    h.createMock
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "c1",
+                  type: "function",
+                  function: {
+                    name: "save_interesting_place",
+                    arguments: '{"query":"Crater Lake","source_note":"future road trip"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(assistant("Запомнил Crater Lake."));
+
+    const result = await runAgent(111, "запомни Crater Lake в общие интересные места");
+
+    expect(h.createTripHandler).not.toHaveBeenCalled();
+    expect(h.saveInterestingPlaceHandler).toHaveBeenCalledWith(expect.anything(), {
+      query: "Crater Lake",
+      source_note: "future road trip",
+    });
+    expect(result.reply).toBe("Запомнил Crater Lake.");
   });
 
   it("reports tool errors back to the model without throwing", async () => {

@@ -30,6 +30,15 @@ import {
   enrichPlace,
   searchPlaceDetails,
 } from "../services/placeEnrichment";
+import {
+  deleteSavedPlace,
+  listSavedPlaces,
+  saveInterestingPlace,
+  SAVED_PLACE_STATUSES,
+  updateSavedPlace,
+} from "../services/savedPlaces";
+import type { SavedPlace, SavedPlaceStatus } from "../services/savedPlaces";
+import { suggestSavedPlacesOnRoute } from "../services/googleRoutes";
 import { setActiveTripId } from "../services/users";
 
 export interface AgentContext {
@@ -42,6 +51,7 @@ export interface AgentContext {
 type ToolHandler = (ctx: AgentContext, args: Record<string, unknown>) => Promise<unknown>;
 
 const PLACE_CATEGORY_VALUES = PLACE_CATEGORIES;
+const SAVED_PLACE_STATUS_VALUES = SAVED_PLACE_STATUSES;
 
 function requireTrip(ctx: AgentContext): number {
   if (ctx.activeTripId === null) {
@@ -75,6 +85,17 @@ function requirePlaceCategory(value: unknown, name: string): PlaceCategory {
     throw new Error(`${name} must be one of: ${PLACE_CATEGORY_VALUES.join(", ")}.`);
   }
   return value as PlaceCategory;
+}
+
+function requireSavedPlaceStatus(value: unknown, name: string): SavedPlaceStatus {
+  if (value === null) return "want_to_visit";
+  if (
+    typeof value !== "string" ||
+    !SAVED_PLACE_STATUS_VALUES.includes(value as (typeof SAVED_PLACE_STATUS_VALUES)[number])
+  ) {
+    throw new Error(`${name} must be one of: ${SAVED_PLACE_STATUS_VALUES.join(", ")}.`);
+  }
+  return value as SavedPlaceStatus;
 }
 
 export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -284,11 +305,12 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "search_place_details",
       description:
-        "Search Google Places for richer details about a place without saving anything. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place when updating an existing saved place.",
+        "Search Google Places for richer details about a place without saving anything. Works without an active trip; if an active trip exists, its destination is used as search context unless destination is provided. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place when updating an existing trip place.",
       parameters: {
         type: "object",
         properties: {
           query: { type: "string", description: "Place name or search query." },
+          destination: { type: "string", description: "Optional city/region/country to bias the search." },
           max_results: { type: "integer", description: "Maximum number of candidates to return." },
         },
         required: ["query"],
@@ -355,6 +377,120 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           confirmed: { type: "boolean", description: "Must be true after explicit user confirmation." },
         },
         required: ["place_id", "confirmed"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "save_interesting_place",
+      description:
+        "Save a place to the user's general interesting places list, not to the active trip. Works even when there is no active trip. Uses Google Places enrichment when possible.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Place name or Google Places search query." },
+          external_id: { type: "string", description: "Google Places id if already known." },
+          status: { type: "string", enum: SAVED_PLACE_STATUS_VALUES },
+          source_note: { type: "string", description: "Why the user wants to remember this place." },
+          notes: { type: "string" },
+          priority: { type: "integer", description: "1 = highest priority." },
+          duration_min: { type: "integer", description: "Typical visit length in minutes." },
+          kid_friendly: { type: "boolean" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_interesting_places",
+      description:
+        "List the user's general interesting places, independent of the active trip.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: SAVED_PLACE_STATUS_VALUES },
+          category: { type: "string", enum: PLACE_CATEGORY_VALUES },
+          with_coordinates_only: { type: "boolean" },
+          limit: { type: "integer" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_interesting_place",
+      description: "Update a place in the user's general interesting places list.",
+      parameters: {
+        type: "object",
+        properties: {
+          saved_place_id: { type: "integer" },
+          name: { type: "string" },
+          category: { type: "string", enum: PLACE_CATEGORY_VALUES },
+          address: { type: "string" },
+          latitude: { type: "number" },
+          longitude: { type: "number" },
+          status: { type: "string", enum: SAVED_PLACE_STATUS_VALUES },
+          priority: { type: "integer", description: "1 = highest priority." },
+          duration_min: { type: "integer", description: "Typical visit length in minutes." },
+          kid_friendly: { type: "boolean" },
+          source_note: { type: "string" },
+          notes: { type: "string" },
+        },
+        required: ["saved_place_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_interesting_place",
+      description:
+        "Delete a place from the user's general interesting places list. Only call after explicit user confirmation.",
+      parameters: {
+        type: "object",
+        properties: {
+          saved_place_id: { type: "integer" },
+          confirmed: { type: "boolean", description: "Must be true after explicit user confirmation." },
+        },
+        required: ["saved_place_id", "confirmed"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "suggest_saved_places_on_route",
+      description:
+        "Find the user's saved interesting places near a driving route and suggest those with a small detour. Use only when both origin and destination are known; if the user only gives a destination like 'Utah', ask where they are starting from before calling this tool.",
+      parameters: {
+        type: "object",
+        properties: {
+          origin: { type: "string", description: "Route start address/place/city. Do not guess this." },
+          destination: { type: "string", description: "Route end address/place/city. Do not guess this." },
+          status: { type: "string", enum: SAVED_PLACE_STATUS_VALUES },
+          category: { type: "string", enum: PLACE_CATEGORY_VALUES },
+          max_distance_from_route_km: {
+            type: "number",
+            description: "Polyline prefilter radius in km. Default is 50.",
+          },
+          max_route_checks: {
+            type: "integer",
+            description: "Maximum detour route checks to run after polyline filtering. Default is 15.",
+          },
+          max_detour_min: {
+            type: "integer",
+            description: "Maximum extra driving time in minutes. Default is 30.",
+          },
+          max_detour_ratio: {
+            type: "number",
+            description: "Maximum extra driving time as a fraction of base route duration. Default is 0.15.",
+          },
+        },
+        required: ["origin", "destination"],
       },
     },
   },
@@ -559,6 +695,31 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+function savedPlaceToToolResult(place: SavedPlace) {
+  return {
+    id: place.id,
+    name: place.name,
+    category: place.category,
+    status: place.status,
+    address: place.address,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    website_url: place.websiteUrl,
+    maps_url: place.mapsUrl,
+    phone: place.phone,
+    booking_url: place.bookingUrl,
+    ticket_url: place.ticketUrl,
+    reservation_recommended: place.reservationRecommended,
+    rating: place.rating,
+    price_level: place.priceLevel,
+    priority: place.priority,
+    duration_min: place.durationMin,
+    kid_friendly: place.kidFriendly,
+    source_note: place.sourceNote,
+    notes: place.notes,
+  };
+}
+
 export const toolHandlers: Record<string, ToolHandler> = {
   async create_trip(ctx, args) {
     const trip = await createTrip({
@@ -677,12 +838,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async search_place_details(ctx, args) {
-    const tripId = requireTrip(ctx);
-    const trip = await getTrip(ctx.telegramId, tripId);
-    if (!trip) throw new Error("Active trip not found.");
+    const trip = ctx.activeTripId === null ? null : await getTrip(ctx.telegramId, ctx.activeTripId);
     const places = await searchPlaceDetails({
       query: String(args.query),
-      destination: trip.destination,
+      destination: (args.destination as string) ?? trip?.destination ?? null,
       maxResults: args.max_results !== undefined ? requireInteger(args.max_results, "max_results") : undefined,
     });
     return places.map((p) => ({
@@ -766,6 +925,117 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const tripId = requireTrip(ctx);
     const ok = await deletePlace(tripId, requireInteger(args.place_id, "place_id"));
     return { ok };
+  },
+
+  async save_interesting_place(ctx, args) {
+    const result = await saveInterestingPlace({
+      telegramId: ctx.telegramId,
+      query: String(args.query),
+      externalId: (args.external_id as string) ?? null,
+      status:
+        args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : "want_to_visit",
+      sourceNote: (args.source_note as string) ?? null,
+      notes: (args.notes as string) ?? null,
+      priority: args.priority !== undefined ? requireInteger(args.priority, "priority") : null,
+      durationMin:
+        args.duration_min !== undefined ? requireInteger(args.duration_min, "duration_min") : null,
+      kidFriendly: args.kid_friendly !== undefined ? Boolean(args.kid_friendly) : null,
+    });
+    return {
+      ok: true,
+      created: result.created,
+      saved_place_id: result.place.id,
+      place: savedPlaceToToolResult(result.place),
+      google_place: result.googlePlace
+        ? {
+            external_id: result.googlePlace.externalId,
+            name: result.googlePlace.name,
+            category: result.googlePlace.category,
+            address: result.googlePlace.address,
+            website_url: result.googlePlace.websiteUrl,
+            maps_url: result.googlePlace.mapsUrl,
+            phone: result.googlePlace.phone,
+            booking_url: result.googlePlace.bookingUrl,
+            ticket_url: result.googlePlace.ticketUrl,
+            reservation_recommended: result.googlePlace.reservationRecommended,
+            advice: result.googlePlace.advice,
+          }
+        : null,
+    };
+  },
+
+  async list_interesting_places(ctx, args) {
+    const places = await listSavedPlaces(ctx.telegramId, {
+      status: args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : undefined,
+      category:
+        args.category !== undefined ? requirePlaceCategory(args.category, "category") : undefined,
+      withCoordinatesOnly: Boolean(args.with_coordinates_only),
+      limit: args.limit !== undefined ? requireInteger(args.limit, "limit") : undefined,
+    });
+    return places.map(savedPlaceToToolResult);
+  },
+
+  async update_interesting_place(ctx, args) {
+    const place = await updateSavedPlace(ctx.telegramId, requireInteger(args.saved_place_id, "saved_place_id"), {
+      ...(args.name !== undefined ? { name: String(args.name) } : {}),
+      ...(args.category !== undefined
+        ? { category: requirePlaceCategory(args.category, "category") }
+        : {}),
+      ...(args.address !== undefined ? { address: args.address as string } : {}),
+      ...(args.latitude !== undefined ? { latitude: Number(args.latitude) } : {}),
+      ...(args.longitude !== undefined ? { longitude: Number(args.longitude) } : {}),
+      ...(args.status !== undefined ? { status: requireSavedPlaceStatus(args.status, "status") } : {}),
+      ...(args.priority !== undefined ? { priority: requireInteger(args.priority, "priority") } : {}),
+      ...(args.duration_min !== undefined
+        ? { durationMin: requireInteger(args.duration_min, "duration_min") }
+        : {}),
+      ...(args.kid_friendly !== undefined ? { kidFriendly: Boolean(args.kid_friendly) } : {}),
+      ...(args.source_note !== undefined ? { sourceNote: args.source_note as string } : {}),
+      ...(args.notes !== undefined ? { notes: args.notes as string } : {}),
+    });
+    return { ok: Boolean(place), saved_place_id: place?.id, place: place ? savedPlaceToToolResult(place) : null };
+  },
+
+  async delete_interesting_place(ctx, args) {
+    requireConfirmation(args);
+    const ok = await deleteSavedPlace(ctx.telegramId, requireInteger(args.saved_place_id, "saved_place_id"));
+    return { ok };
+  },
+
+  async suggest_saved_places_on_route(ctx, args) {
+    const places = await listSavedPlaces(ctx.telegramId, {
+      status: args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : "want_to_visit",
+      category:
+        args.category !== undefined ? requirePlaceCategory(args.category, "category") : undefined,
+      withCoordinatesOnly: true,
+    });
+    const suggestions = await suggestSavedPlacesOnRoute(
+      String(args.origin),
+      String(args.destination),
+      places,
+      {
+        maxDistanceFromRouteMeters:
+          args.max_distance_from_route_km !== undefined
+            ? Number(args.max_distance_from_route_km) * 1000
+            : undefined,
+        maxRouteChecks:
+          args.max_route_checks !== undefined
+            ? requireInteger(args.max_route_checks, "max_route_checks")
+            : undefined,
+        maxDetourDurationSeconds:
+          args.max_detour_min !== undefined ? requireInteger(args.max_detour_min, "max_detour_min") * 60 : undefined,
+        maxDetourRatio: args.max_detour_ratio !== undefined ? Number(args.max_detour_ratio) : undefined,
+      },
+    );
+    return suggestions.map((s) => ({
+      place: savedPlaceToToolResult(s.place),
+      distance_from_route_km: Math.round((s.distanceFromRouteMeters / 1000) * 10) / 10,
+      detour_min: Math.round(s.detourDurationSeconds / 60),
+      detour_km: Math.round((s.detourDistanceMeters / 1000) * 10) / 10,
+      detour_ratio: Math.round(s.detourRatio * 1000) / 1000,
+      route_duration_min: Math.round(s.routeDurationSeconds / 60),
+      route_distance_km: Math.round((s.routeDistanceMeters / 1000) * 10) / 10,
+    }));
   },
 
   async add_reservation(ctx, args) {

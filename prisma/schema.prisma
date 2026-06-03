@@ -31,6 +31,7 @@ model TgUser {
   appState  AppState?
   memories  Memory[]
   messages  ConversationMessage[]
+  savedPlaces SavedPlace[]
 
   @@map("tg_users")
 }
@@ -104,6 +105,42 @@ model Place {
   @@unique([tripId, externalProvider, externalId])
   @@index([tripId])
   @@map("places")
+}
+
+model SavedPlace {
+  id                     Int           @id @default(autoincrement())
+  telegramId             BigInt        @map("telegram_id")
+  name                   String
+  category               PlaceCategory @default(other)
+  address                String?
+  latitude               Float?
+  longitude              Float?
+  externalProvider       String?       @map("external_provider")
+  externalId             String?       @map("external_id")
+  websiteUrl             String?       @map("website_url")
+  mapsUrl                String?       @map("maps_url")
+  phone                  String?
+  bookingUrl             String?       @map("booking_url")
+  ticketUrl              String?       @map("ticket_url")
+  reservationRecommended Boolean       @default(false) @map("reservation_recommended")
+  openingHours           Json?         @map("opening_hours")
+  rating                 Float?
+  priceLevel             Int?          @map("price_level")
+  priority               Int?
+  durationMin            Int?          @map("duration_min")
+  kidFriendly            Boolean?      @map("kid_friendly")
+  status                 String        @default("want_to_visit")
+  sourceNote             String?       @map("source_note")
+  notes                  String?
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @default(now()) @updatedAt @map("updated_at")
+
+  user TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+
+  @@unique([telegramId, externalProvider, externalId])
+  @@index([telegramId])
+  @@index([telegramId, status])
+  @@map("saved_places")
 }
 
 model ItineraryDay {

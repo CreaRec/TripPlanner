@@ -29,6 +29,11 @@ const m = vi.hoisted(() => ({
   exportItineraryPdf: vi.fn(),
   searchPlaceDetails: vi.fn(),
   enrichPlace: vi.fn(),
+  deleteSavedPlace: vi.fn(),
+  listSavedPlaces: vi.fn(),
+  saveInterestingPlace: vi.fn(),
+  updateSavedPlace: vi.fn(),
+  suggestSavedPlacesOnRoute: vi.fn(),
   setActiveTripId: vi.fn(),
 }));
 
@@ -82,6 +87,16 @@ vi.mock("../services/placeEnrichment", () => ({
   searchPlaceDetails: m.searchPlaceDetails,
   enrichPlace: m.enrichPlace,
 }));
+vi.mock("../services/savedPlaces", () => ({
+  SAVED_PLACE_STATUSES: ["want_to_visit", "visited", "archived"],
+  deleteSavedPlace: m.deleteSavedPlace,
+  listSavedPlaces: m.listSavedPlaces,
+  saveInterestingPlace: m.saveInterestingPlace,
+  updateSavedPlace: m.updateSavedPlace,
+}));
+vi.mock("../services/googleRoutes", () => ({
+  suggestSavedPlacesOnRoute: m.suggestSavedPlacesOnRoute,
+}));
 vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
 
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
@@ -94,6 +109,32 @@ function toolFunction(name: string) {
   const tool = toolDefinitions.find((t) => t.type === "function" && t.function.name === name);
   if (!tool || tool.type !== "function") throw new Error(`Tool ${name} not found.`);
   return tool.function;
+}
+
+function savedPlace(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 77,
+    name: "Crater Lake",
+    category: "national_park",
+    status: "want_to_visit",
+    address: "Oregon",
+    latitude: 42.9446,
+    longitude: -122.109,
+    websiteUrl: "https://www.nps.gov/crla",
+    mapsUrl: "https://maps.google.com/?cid=crater",
+    phone: null,
+    bookingUrl: null,
+    ticketUrl: "https://www.nps.gov/crla",
+    reservationRecommended: true,
+    rating: 4.9,
+    priceLevel: null,
+    priority: 1,
+    durationMin: 180,
+    kidFriendly: true,
+    sourceNote: "Road trip idea",
+    notes: "Scenic stop",
+    ...overrides,
+  };
 }
 
 describe("toolDefinitions", () => {
@@ -113,6 +154,11 @@ describe("toolDefinitions", () => {
         "enrich_place",
         "update_place",
         "delete_place",
+        "save_interesting_place",
+        "list_interesting_places",
+        "update_interesting_place",
+        "delete_interesting_place",
+        "suggest_saved_places_on_route",
         "add_reservation",
         "list_reservations",
         "update_reservation",
@@ -149,6 +195,18 @@ describe("toolDefinitions", () => {
     expect((updatePlace.parameters as any).properties.category.enum).toEqual(expectedCategories);
   });
 
+  it("restricts interesting place statuses to supported values", () => {
+    const saveInterestingPlace = toolFunction("save_interesting_place");
+    const updateInterestingPlace = toolFunction("update_interesting_place");
+
+    expect((saveInterestingPlace.parameters as any).properties.status.enum).toEqual([
+      "want_to_visit",
+      "visited",
+      "archived",
+    ]);
+    expect((updateInterestingPlace.parameters as any).properties.status.enum).toContain("visited");
+  });
+
   it("instructs the agent to pass search results into enrich_place for existing places", () => {
     const searchPlace = toolFunction("search_place_details");
     const enrichPlace = toolFunction("enrich_place");
@@ -156,6 +214,14 @@ describe("toolDefinitions", () => {
     expect(searchPlace.description).toContain("pass the selected external_id to enrich_place");
     expect(enrichPlace.description).toContain("existing place_id");
     expect(enrichPlace.description).toContain("external_id");
+  });
+
+  it("tells the agent not to guess route endpoints", () => {
+    const suggestRoute = toolFunction("suggest_saved_places_on_route");
+
+    expect(suggestRoute.description).toContain("both origin and destination");
+    expect(suggestRoute.description).toContain("ask where they are starting from");
+    expect((suggestRoute.parameters as any).properties.origin.description).toContain("Do not guess");
   });
 });
 
@@ -181,6 +247,136 @@ describe("create_trip", () => {
     expect(m.setActiveTripId).toHaveBeenLastCalledWith(111, null);
     expect(c.activeTripId).toBeNull();
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe("general interesting places", () => {
+  it("saves an interesting place without an active trip", async () => {
+    const place = savedPlace();
+    m.saveInterestingPlace.mockResolvedValueOnce({
+      place,
+      googlePlace: {
+        externalId: "g-crater",
+        name: "Crater Lake National Park",
+        category: "national_park",
+        address: "Oregon",
+        websiteUrl: "https://www.nps.gov/crla",
+        mapsUrl: "https://maps.google.com/?cid=crater",
+        phone: null,
+        bookingUrl: null,
+        ticketUrl: "https://www.nps.gov/crla",
+        reservationRecommended: true,
+        advice: "Check permits.",
+      },
+      created: true,
+    });
+
+    const result = await toolHandlers.save_interesting_place(ctx(null), {
+      query: "Crater Lake",
+      source_note: "for a future Oregon road trip",
+    });
+
+    expect(m.saveInterestingPlace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        telegramId: 111,
+        query: "Crater Lake",
+        status: "want_to_visit",
+        sourceNote: "for a future Oregon road trip",
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      created: true,
+      saved_place_id: 77,
+      place: { name: "Crater Lake", maps_url: "https://maps.google.com/?cid=crater" },
+    });
+  });
+
+  it("lists interesting places independently of the active trip", async () => {
+    m.listSavedPlaces.mockResolvedValueOnce([savedPlace()]);
+
+    const result = await toolHandlers.list_interesting_places(ctx(null), {
+      status: "want_to_visit",
+      with_coordinates_only: true,
+      limit: 5,
+    });
+
+    expect(m.listSavedPlaces).toHaveBeenCalledWith(111, {
+      status: "want_to_visit",
+      category: undefined,
+      withCoordinatesOnly: true,
+      limit: 5,
+    });
+    expect(result).toEqual([expect.objectContaining({ id: 77, name: "Crater Lake" })]);
+  });
+
+  it("updates an interesting place", async () => {
+    m.updateSavedPlace.mockResolvedValueOnce(savedPlace({ status: "visited" }));
+
+    const result = await toolHandlers.update_interesting_place(ctx(null), {
+      saved_place_id: 77,
+      status: "visited",
+      notes: "Went in June",
+    });
+
+    expect(m.updateSavedPlace).toHaveBeenCalledWith(
+      111,
+      77,
+      expect.objectContaining({ status: "visited", notes: "Went in June" }),
+    );
+    expect(result).toMatchObject({ ok: true, saved_place_id: 77, place: { status: "visited" } });
+  });
+
+  it("delete_interesting_place requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_interesting_place(ctx(null), { saved_place_id: 77 })).rejects.toThrow(
+      /confirmation/,
+    );
+  });
+
+  it("suggests saved places on a route with route limits", async () => {
+    const place = savedPlace();
+    m.listSavedPlaces.mockResolvedValueOnce([place]);
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([
+      {
+        place,
+        distanceFromRouteMeters: 12_300,
+        detourDurationSeconds: 900,
+        detourDistanceMeters: 18_200,
+        detourRatio: 0.04,
+        routeDurationSeconds: 22_500,
+        routeDistanceMeters: 410_000,
+      },
+    ]);
+
+    const result = await toolHandlers.suggest_saved_places_on_route(ctx(null), {
+      origin: "Portland, OR",
+      destination: "San Francisco, CA",
+      max_distance_from_route_km: 40,
+      max_route_checks: 10,
+      max_detour_min: 25,
+    });
+
+    expect(m.listSavedPlaces).toHaveBeenCalledWith(
+      111,
+      expect.objectContaining({ status: "want_to_visit", withCoordinatesOnly: true }),
+    );
+    expect(m.suggestSavedPlacesOnRoute).toHaveBeenCalledWith(
+      "Portland, OR",
+      "San Francisco, CA",
+      [place],
+      expect.objectContaining({
+        maxDistanceFromRouteMeters: 40_000,
+        maxRouteChecks: 10,
+        maxDetourDurationSeconds: 1500,
+      }),
+    );
+    expect(result).toEqual([
+      expect.objectContaining({
+        distance_from_route_km: 12.3,
+        detour_min: 15,
+        detour_km: 18.2,
+      }),
+    ]);
   });
 });
 
@@ -343,6 +539,40 @@ describe("requireTrip-guarded tools", () => {
         external_provider: "google_places",
         external_id: "abc",
         category: "museum",
+      }),
+    ]);
+  });
+
+  it("search_place_details works without an active trip", async () => {
+    m.searchPlaceDetails.mockResolvedValueOnce([
+      {
+        provider: "google_places",
+        externalId: "moki",
+        name: "Moki Dugway",
+        category: "other",
+        address: "UT-261, Utah",
+        latitude: 37.274,
+        longitude: -109.942,
+        mapsUrl: "https://maps.google.com/?cid=moki",
+        types: ["point_of_interest"],
+      },
+    ]);
+
+    const result = await toolHandlers.search_place_details(ctx(null), {
+      query: "Moki Dugway",
+      destination: "Utah",
+    });
+
+    expect(m.getTrip).not.toHaveBeenCalled();
+    expect(m.searchPlaceDetails).toHaveBeenCalledWith({
+      query: "Moki Dugway",
+      destination: "Utah",
+      maxResults: undefined,
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        external_id: "moki",
+        maps_url: "https://maps.google.com/?cid=moki",
       }),
     ]);
   });
