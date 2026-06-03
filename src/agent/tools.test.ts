@@ -104,6 +104,7 @@ describe("toolDefinitions", () => {
         "create_trip",
         "list_trips",
         "select_trip",
+        "clear_active_trip",
         "update_trip",
         "delete_trip",
         "add_place",
@@ -472,6 +473,15 @@ describe("select_trip", () => {
   it("throws when the trip does not exist", async () => {
     m.getTrip.mockResolvedValueOnce(null);
     await expect(toolHandlers.select_trip(ctx(), { trip_id: 99 })).rejects.toThrow(/not found/);
+  });
+
+  it("clears the active trip without deleting it", async () => {
+    const c = ctx(42);
+    const result = await toolHandlers.clear_active_trip(c, {});
+    expect(c.activeTripId).toBeNull();
+    expect(m.setActiveTripId).toHaveBeenCalledWith(111, null);
+    expect(m.deleteTrip).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true, active: false });
   });
 });
 

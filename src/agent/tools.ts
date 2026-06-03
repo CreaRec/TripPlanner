@@ -200,6 +200,15 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "clear_active_trip",
+      description:
+        "Clear the active trip without deleting it. Use when the user wants to leave/exit the current trip or have no active trip selected.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_trip",
       description: "Update fields of the active trip, including its high-level summary.",
       parameters: {
@@ -583,6 +592,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
     ctx.activeTripId = trip.id;
     await setActiveTripId(ctx.telegramId, trip.id);
     return { ok: true, trip_id: trip.id, title: trip.title, active: true };
+  },
+
+  async clear_active_trip(ctx) {
+    ctx.activeTripId = null;
+    await setActiveTripId(ctx.telegramId, null);
+    return { ok: true, active: false };
   },
 
   async update_trip(ctx, args) {

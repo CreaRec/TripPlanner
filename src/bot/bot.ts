@@ -3,9 +3,7 @@ import { message } from "telegraf/filters";
 import { config } from "../config";
 import { runAgent } from "../agent/runAgent";
 import { extractTravelInfoFromImage } from "../agent/vision";
-import { getTrip, listTrips } from "../services/trips";
-import { exportItineraryCsv, exportItineraryPdf } from "../services/export";
-import { ensureUser, getActiveTripId, setActiveTripId } from "../services/users";
+import { ensureUser } from "../services/users";
 
 async function sendAgentResult(
   ctx: { reply: (text: string) => Promise<unknown>; replyWithDocument: (doc: { source: string }) => Promise<unknown> },
@@ -64,13 +62,7 @@ export function createBot(): Telegraf {
       [
         "Hi! I'm your trip planner.",
         "",
-        "Just tell me about a trip you're planning and I'll help with itineraries, places, and memory of your preferences.",
-        "",
-        "Commands:",
-        "/trips - list your trips",
-        "/use <id> - set the active trip",
-        "/export [pdf|csv] - export the active trip's itinerary",
-        "/help - show this help",
+        "Just write what you want in plain language: plan a trip, show your trips, switch to another trip, export the itinerary, or leave the current trip.",
       ].join("\n"),
     );
   });
@@ -80,60 +72,13 @@ export function createBot(): Telegraf {
       [
         "Talk to me in plain language to plan a trip.",
         "",
-        "/trips - list your trips",
-        "/use <id> - set the active trip",
-        "/export [pdf|csv] - export the active itinerary",
+        "Examples:",
+        "Show my trips",
+        "Switch to the Paris trip",
+        "Export the active itinerary as PDF",
+        "Leave the current trip",
       ].join("\n"),
     );
-  });
-
-  bot.command("trips", async (ctx) => {
-    const trips = await listTrips(ctx.from.id);
-    if (trips.length === 0) {
-      await ctx.reply("No trips yet. Tell me where you'd like to go!");
-      return;
-    }
-    const activeId = await getActiveTripId(ctx.from.id);
-    const lines = trips.map((t) => {
-      const mark = t.id === activeId ? " (active)" : "";
-      const dest = t.destination ? ` - ${t.destination}` : "";
-      return `${t.id}: ${t.title}${dest}${mark}`;
-    });
-    await ctx.reply(["Your trips:", ...lines, "", "Use /use <id> to switch."].join("\n"));
-  });
-
-  bot.command("use", async (ctx) => {
-    const parts = ctx.message.text.trim().split(/\s+/);
-    const tripId = Number(parts[1]);
-    if (!parts[1] || !Number.isInteger(tripId)) {
-      await ctx.reply("Usage: /use <trip_id>  (see /trips)");
-      return;
-    }
-    const trip = await getTrip(ctx.from.id, tripId);
-    if (!trip) {
-      await ctx.reply(`No trip with id ${parts[1]}. See /trips.`);
-      return;
-    }
-    await setActiveTripId(ctx.from.id, trip.id);
-    await ctx.reply(`Active trip is now: ${trip.title}`);
-  });
-
-  bot.command("export", async (ctx) => {
-    const parts = ctx.message.text.trim().split(/\s+/);
-    const format = (parts[1] ?? "pdf").toLowerCase() === "csv" ? "csv" : "pdf";
-    const activeId = await getActiveTripId(ctx.from.id);
-    if (activeId === null) {
-      await ctx.reply("No active trip. See /trips or start planning one.");
-      return;
-    }
-    const trip = await getTrip(ctx.from.id, activeId);
-    if (!trip) {
-      await ctx.reply("Active trip not found.");
-      return;
-    }
-    await ctx.sendChatAction("upload_document");
-    const path = format === "csv" ? await exportItineraryCsv(trip) : await exportItineraryPdf(trip);
-    await ctx.replyWithDocument({ source: path });
   });
 
   bot.on(message("photo"), async (ctx) => {

@@ -122,60 +122,21 @@ describe("whitelist middleware", () => {
   });
 });
 
-describe("/trips", () => {
-  it("tells the user when there are no trips", async () => {
-    f.listTrips.mockResolvedValueOnce([]);
-    const ctx = fakeCtx();
-    await bot().commands.trips(ctx);
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("No trips yet"));
+describe("plain-language help", () => {
+  it("does not register trip-management slash commands", () => {
+    expect(bot().commands).toEqual({});
   });
 
-  it("lists trips and marks the active one", async () => {
-    f.listTrips.mockResolvedValueOnce([
-      { id: 1, title: "Alps", destination: "CH" },
-      { id: 2, title: "Coast", destination: null },
-    ]);
-    f.getActiveTripId.mockResolvedValueOnce(2);
+  it("describes text-based actions in /help", async () => {
     const ctx = fakeCtx();
-    await bot().commands.trips(ctx);
+    await bot().help?.(ctx);
     const text = ctx.reply.mock.calls[0][0];
-    expect(text).toContain("1: Alps - CH");
-    expect(text).toContain("2: Coast (active)");
-  });
-});
-
-describe("/use", () => {
-  it("rejects a non-numeric id", async () => {
-    const ctx = fakeCtx({ message: { text: "/use abc" } });
-    await bot().commands.use(ctx);
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("Usage"));
-  });
-
-  it("sets the active trip when found", async () => {
-    f.getTrip.mockResolvedValueOnce({ id: 5, title: "Alps" });
-    const ctx = fakeCtx({ message: { text: "/use 5" } });
-    await bot().commands.use(ctx);
-    expect(f.setActiveTripId).toHaveBeenCalledWith(111, 5);
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("Alps"));
-  });
-});
-
-describe("/export", () => {
-  it("warns when there is no active trip", async () => {
-    f.getActiveTripId.mockResolvedValueOnce(null);
-    const ctx = fakeCtx({ message: { text: "/export" } });
-    await bot().commands.export(ctx);
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("No active trip"));
-  });
-
-  it("sends a CSV document when requested", async () => {
-    f.getActiveTripId.mockResolvedValueOnce(7);
-    f.getTrip.mockResolvedValueOnce({ id: 7, title: "Alps" });
-    f.exportItineraryCsv.mockResolvedValueOnce("/tmp/alps-7.csv");
-    const ctx = fakeCtx({ message: { text: "/export csv" } });
-    await bot().commands.export(ctx);
-    expect(f.exportItineraryCsv).toHaveBeenCalled();
-    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/alps-7.csv" });
+    expect(text).toContain("plain language");
+    expect(text).toContain("Show my trips");
+    expect(text).toContain("Leave the current trip");
+    expect(text).not.toContain("/trips");
+    expect(text).not.toContain("/use");
+    expect(text).not.toContain("/export");
   });
 });
 
