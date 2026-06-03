@@ -12,6 +12,16 @@ export interface AddPlaceInput {
   notes?: string | null;
 }
 
+export interface UpdatePlaceFields {
+  name?: string;
+  category?: string | null;
+  address?: string | null;
+  priority?: number | null;
+  durationMin?: number | null;
+  kidFriendly?: boolean | null;
+  notes?: string | null;
+}
+
 export async function addPlace(input: AddPlaceInput): Promise<Place> {
   return prisma.place.create({
     data: {
@@ -32,4 +42,35 @@ export async function listPlaces(tripId: number): Promise<Place[]> {
     where: { tripId },
     orderBy: [{ priority: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }],
   });
+}
+
+export async function updatePlace(
+  tripId: number,
+  placeId: number,
+  fields: UpdatePlaceFields,
+): Promise<Place | null> {
+  const place = await prisma.place.findFirst({
+    where: { id: placeId, tripId },
+  });
+  if (!place) return null;
+
+  return prisma.place.update({
+    where: { id: placeId },
+    data: {
+      ...(fields.name !== undefined ? { name: fields.name } : {}),
+      ...(fields.category !== undefined ? { category: fields.category } : {}),
+      ...(fields.address !== undefined ? { address: fields.address } : {}),
+      ...(fields.priority !== undefined ? { priority: fields.priority } : {}),
+      ...(fields.durationMin !== undefined ? { durationMin: fields.durationMin } : {}),
+      ...(fields.kidFriendly !== undefined ? { kidFriendly: fields.kidFriendly } : {}),
+      ...(fields.notes !== undefined ? { notes: fields.notes } : {}),
+    },
+  });
+}
+
+export async function deletePlace(tripId: number, placeId: number): Promise<boolean> {
+  const result = await prisma.place.deleteMany({
+    where: { id: placeId, tripId },
+  });
+  return result.count > 0;
 }

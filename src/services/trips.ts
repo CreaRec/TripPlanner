@@ -68,3 +68,11 @@ export async function updateTrip(
     },
   });
 }
+
+export async function deleteTrip(telegramId: number, tripId: number): Promise<boolean> {
+  const trip = await getTrip(telegramId, tripId);
+  if (!trip) return false;
+
+  await prisma.trip.delete({ where: { id: tripId } });
+  return true;
+}

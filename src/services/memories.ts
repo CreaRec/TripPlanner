@@ -64,3 +64,24 @@ export async function listMemories(
   });
   return rows.map((r) => ({ id: r.id, trip_id: r.tripId, kind: r.kind, content: r.content }));
 }
+
+export async function deleteMemory(
+  telegramId: number,
+  memoryId: number,
+  tripId?: number | null,
+): Promise<boolean> {
+  const result = await prisma.memory.deleteMany({
+    where: {
+      id: memoryId,
+      telegramId: BigInt(telegramId),
+      ...(tripId !== undefined ? { OR: [{ tripId: null }, { tripId }] } : {}),
+    },
+  });
+  return result.count > 0;
+}
+
+export async function replaceMemory(input: SaveMemoryInput & { memoryId: number }): Promise<MemoryRecord | null> {
+  const deleted = await deleteMemory(input.telegramId, input.memoryId, input.tripId);
+  if (!deleted) return null;
+  return saveMemory(input);
+}

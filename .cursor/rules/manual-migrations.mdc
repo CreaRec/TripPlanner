@@ -1,0 +1,10 @@
+---
+description: Do not apply database migrations automatically
+alwaysApply: true
+---
+
+# Manual Migrations
+
+- Do not run commands that apply database migrations automatically, including `prisma migrate dev`, `prisma migrate deploy`, or scripts that wrap those commands.
+- If a task appears to require applying migrations, ask the user first and wait for explicit approval.
+- Prefer generating or editing migration files only, such as with `prisma migrate dev --create-only`, then leave applying the migration to the user unless they explicitly ask otherwise.

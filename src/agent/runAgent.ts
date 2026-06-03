@@ -5,6 +5,7 @@ import { getTrip } from "../services/trips";
 import { getItinerary } from "../services/itinerary";
 import { searchMemories } from "../services/memories";
 import { recentMessages, saveMessage } from "../services/messages";
+import { listReservations } from "../services/reservations";
 import { getActiveTripId } from "../services/users";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
@@ -15,6 +16,11 @@ const MAX_TOOL_ITERATIONS = 8;
 
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
+function fromDateTime(value: Date | null | undefined): string | null {
+  if (!value) return null;
+  return value.toISOString().replace(/:00\.000Z$/, "Z");
+}
+
 async function buildContextBlock(ctx: AgentContext, userText: string): Promise<string> {
   if (ctx.activeTripId === null) {
     return "There is no active trip yet. If the user wants to plan, create one.";
@@ -22,7 +28,7 @@ async function buildContextBlock(ctx: AgentContext, userText: string): Promise<s
   const trip = await getTrip(ctx.telegramId, ctx.activeTripId);
   if (!trip) return "No active trip found.";
 
-  const [memories, itinerary] = await Promise.all([
+  const [memories, itinerary, reservations] = await Promise.all([
     searchMemories({
       telegramId: ctx.telegramId,
       tripId: ctx.activeTripId,
@@ -30,6 +36,7 @@ async function buildContextBlock(ctx: AgentContext, userText: string): Promise<s
       limit: 6,
     }),
     getItinerary(ctx.activeTripId),
+    listReservations(ctx.activeTripId),
   ]);
 
   const lines: string[] = [];
@@ -54,6 +61,17 @@ async function buildContextBlock(ctx: AgentContext, userText: string): Promise<s
         const t = item.timeBlock ? `${item.timeBlock}: ` : "";
         lines.push(`  ${item.isBackup ? "[backup] " : ""}${t}${item.title}`);
       }
+    }
+  }
+
+  if (reservations.length > 0) {
+    lines.push("\nCurrent reservations:");
+    for (const r of reservations) {
+      const dates = [fromDateTime(r.startAt), fromDateTime(r.endAt)].filter(Boolean).join(" -> ");
+      const provider = r.provider ? ` via ${r.provider}` : "";
+      const confirmation = r.confirmationNumber ? ` (confirmation: ${r.confirmationNumber})` : "";
+      const timing = dates ? `${dates}: ` : "";
+      lines.push(`- [${r.type}] ${timing}${r.title}${provider}${confirmation}`);
     }
   }
 

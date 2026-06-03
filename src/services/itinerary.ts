@@ -39,6 +39,16 @@ export interface AddItemInput {
   isBackup?: boolean;
 }
 
+export interface UpdateItemFields {
+  dayNumber?: number;
+  position?: number;
+  title?: string;
+  timeBlock?: string | null;
+  notes?: string | null;
+  placeId?: number | null;
+  isBackup?: boolean;
+}
+
 export async function addItem(input: AddItemInput): Promise<ItineraryItem> {
   const day = await upsertDay({ tripId: input.tripId, dayNumber: input.dayNumber });
   const agg = await prisma.itineraryItem.aggregate({
@@ -74,4 +84,48 @@ export async function clearDay(tripId: number, dayNumber: number): Promise<void>
   await prisma.itineraryItem.deleteMany({
     where: { day: { tripId, dayNumber } },
   });
+}
+
+export async function updateItem(
+  tripId: number,
+  itemId: number,
+  fields: UpdateItemFields,
+): Promise<ItineraryItem | null> {
+  const item = await prisma.itineraryItem.findFirst({
+    where: { id: itemId, day: { tripId } },
+  });
+  if (!item) return null;
+
+  let dayId: number | undefined;
+  if (fields.dayNumber !== undefined) {
+    const day = await upsertDay({ tripId, dayNumber: fields.dayNumber });
+    dayId = day.id;
+  }
+
+  return prisma.itineraryItem.update({
+    where: { id: itemId },
+    data: {
+      ...(dayId !== undefined ? { dayId } : {}),
+      ...(fields.position !== undefined ? { position: fields.position } : {}),
+      ...(fields.title !== undefined ? { title: fields.title } : {}),
+      ...(fields.timeBlock !== undefined ? { timeBlock: fields.timeBlock } : {}),
+      ...(fields.notes !== undefined ? { notes: fields.notes } : {}),
+      ...(fields.placeId !== undefined ? { placeId: fields.placeId } : {}),
+      ...(fields.isBackup !== undefined ? { isBackup: fields.isBackup } : {}),
+    },
+  });
+}
+
+export async function deleteItem(tripId: number, itemId: number): Promise<boolean> {
+  const result = await prisma.itineraryItem.deleteMany({
+    where: { id: itemId, day: { tripId } },
+  });
+  return result.count > 0;
+}
+
+export async function deleteDay(tripId: number, dayNumber: number): Promise<boolean> {
+  const result = await prisma.itineraryDay.deleteMany({
+    where: { tripId, dayNumber },
+  });
+  return result.count > 0;
 }

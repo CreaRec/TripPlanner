@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const { prismaMock, embedMock } = vi.hoisted(() => ({
   prismaMock: {
     $queryRaw: vi.fn(),
-    memory: { findMany: vi.fn() },
+    memory: { findMany: vi.fn(), deleteMany: vi.fn() },
   },
   embedMock: vi.fn(),
 }));
@@ -14,7 +14,7 @@ vi.mock("../openai/embeddings", () => ({
   toVectorLiteral: (v: number[]) => `[${v.join(",")}]`,
 }));
 
-import { listMemories, saveMemory, searchMemories } from "./memories";
+import { deleteMemory, listMemories, replaceMemory, saveMemory, searchMemories } from "./memories";
 
 describe("saveMemory", () => {
   it("embeds the content and returns the inserted row", async () => {
@@ -51,5 +51,47 @@ describe("listMemories", () => {
     ]);
     const rows = await listMemories(111, 5);
     expect(rows).toEqual([{ id: 7, trip_id: 5, kind: "fact", content: "hello" }]);
+  });
+});
+
+describe("deleteMemory", () => {
+  it("deletes a memory scoped to the user and active trip/global memories", async () => {
+    prismaMock.memory.deleteMany.mockResolvedValueOnce({ count: 1 });
+    await expect(deleteMemory(111, 7, 5)).resolves.toBe(true);
+    expect(prismaMock.memory.deleteMany).toHaveBeenCalledWith({
+      where: {
+        id: 7,
+        telegramId: 111n,
+        OR: [{ tripId: null }, { tripId: 5 }],
+      },
+    });
+  });
+});
+
+describe("replaceMemory", () => {
+  it("deletes the old memory before saving the replacement", async () => {
+    prismaMock.memory.deleteMany.mockResolvedValueOnce({ count: 1 });
+    embedMock.mockResolvedValueOnce([1, 2, 3]);
+    prismaMock.$queryRaw.mockResolvedValueOnce([{ id: 8, trip_id: 5, kind: "fact", content: "new" }]);
+    const row = await replaceMemory({
+      telegramId: 111,
+      memoryId: 7,
+      tripId: 5,
+      kind: "fact",
+      content: "new",
+    });
+    expect(row?.id).toBe(8);
+    expect(embedMock).toHaveBeenCalledWith("new");
+  });
+
+  it("does not save when the old memory is not found", async () => {
+    prismaMock.memory.deleteMany.mockResolvedValueOnce({ count: 0 });
+    const row = await replaceMemory({
+      telegramId: 111,
+      memoryId: 7,
+      tripId: 5,
+      content: "new",
+    });
+    expect(row).toBeNull();
   });
 });

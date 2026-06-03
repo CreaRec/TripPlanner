@@ -2,17 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   createTrip: vi.fn(),
+  deleteTrip: vi.fn(),
   getTrip: vi.fn(),
   listTrips: vi.fn(),
   updateTrip: vi.fn(),
   addPlace: vi.fn(),
+  deletePlace: vi.fn(),
   listPlaces: vi.fn(),
+  updatePlace: vi.fn(),
   addItem: vi.fn(),
   clearDay: vi.fn(),
+  deleteDay: vi.fn(),
+  deleteItem: vi.fn(),
   getItinerary: vi.fn(),
+  updateItem: vi.fn(),
   upsertDay: vi.fn(),
+  deleteMemory: vi.fn(),
+  replaceMemory: vi.fn(),
   saveMemory: vi.fn(),
   searchMemories: vi.fn(),
+  addReservation: vi.fn(),
+  deleteReservation: vi.fn(),
+  listReservations: vi.fn(),
+  updateReservation: vi.fn(),
   exportItineraryCsv: vi.fn(),
   exportItineraryPdf: vi.fn(),
   setActiveTripId: vi.fn(),
@@ -20,18 +32,38 @@ const m = vi.hoisted(() => ({
 
 vi.mock("../services/trips", () => ({
   createTrip: m.createTrip,
+  deleteTrip: m.deleteTrip,
   getTrip: m.getTrip,
   listTrips: m.listTrips,
   updateTrip: m.updateTrip,
 }));
-vi.mock("../services/places", () => ({ addPlace: m.addPlace, listPlaces: m.listPlaces }));
+vi.mock("../services/places", () => ({
+  addPlace: m.addPlace,
+  deletePlace: m.deletePlace,
+  listPlaces: m.listPlaces,
+  updatePlace: m.updatePlace,
+}));
 vi.mock("../services/itinerary", () => ({
   addItem: m.addItem,
   clearDay: m.clearDay,
+  deleteDay: m.deleteDay,
+  deleteItem: m.deleteItem,
   getItinerary: m.getItinerary,
+  updateItem: m.updateItem,
   upsertDay: m.upsertDay,
 }));
-vi.mock("../services/memories", () => ({ saveMemory: m.saveMemory, searchMemories: m.searchMemories }));
+vi.mock("../services/memories", () => ({
+  deleteMemory: m.deleteMemory,
+  replaceMemory: m.replaceMemory,
+  saveMemory: m.saveMemory,
+  searchMemories: m.searchMemories,
+}));
+vi.mock("../services/reservations", () => ({
+  addReservation: m.addReservation,
+  deleteReservation: m.deleteReservation,
+  listReservations: m.listReservations,
+  updateReservation: m.updateReservation,
+}));
 vi.mock("../services/export", () => ({
   exportItineraryCsv: m.exportItineraryCsv,
   exportItineraryPdf: m.exportItineraryPdf,
@@ -53,14 +85,26 @@ describe("toolDefinitions", () => {
         "list_trips",
         "select_trip",
         "update_trip",
+        "delete_trip",
         "add_place",
         "list_places",
+        "update_place",
+        "delete_place",
+        "add_reservation",
+        "list_reservations",
+        "update_reservation",
+        "delete_reservation",
         "set_day",
         "add_itinerary_item",
+        "update_itinerary_item",
+        "delete_itinerary_item",
         "clear_day",
+        "delete_day",
         "get_itinerary",
         "save_memory",
         "search_memory",
+        "replace_memory",
+        "delete_memory",
         "export_itinerary",
       ]),
     );
@@ -76,6 +120,20 @@ describe("create_trip", () => {
     expect(m.setActiveTripId).toHaveBeenCalledWith(111, 42);
     expect(result).toMatchObject({ ok: true, trip_id: 42, active: true });
   });
+
+  it("delete_trip requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_trip(ctx(42), {})).rejects.toThrow(/confirmation/);
+  });
+
+  it("delete_trip clears the active trip when deleting it", async () => {
+    m.deleteTrip.mockResolvedValueOnce(true);
+    const c = ctx(42);
+    const result = await toolHandlers.delete_trip(c, { confirmed: true });
+    expect(m.deleteTrip).toHaveBeenCalledWith(111, 42);
+    expect(m.setActiveTripId).toHaveBeenLastCalledWith(111, null);
+    expect(c.activeTripId).toBeNull();
+    expect(result).toEqual({ ok: true });
+  });
 });
 
 describe("requireTrip-guarded tools", () => {
@@ -88,6 +146,118 @@ describe("requireTrip-guarded tools", () => {
     const result = await toolHandlers.add_place(ctx(7), { name: "Lake", kid_friendly: true });
     expect(m.addPlace).toHaveBeenCalledWith(expect.objectContaining({ tripId: 7, name: "Lake", kidFriendly: true }));
     expect(result).toMatchObject({ ok: true, place_id: 5 });
+  });
+
+  it("add_reservation throws when there is no active trip", async () => {
+    await expect(toolHandlers.add_reservation(ctx(null), { type: "hotel", title: "Hotel" })).rejects.toThrow(
+      /No active trip/,
+    );
+  });
+
+  it("add_reservation saves booking details for the active trip", async () => {
+    m.addReservation.mockResolvedValueOnce({ id: 9, title: "Hotel" });
+    const result = await toolHandlers.add_reservation(ctx(7), {
+      type: "hotel",
+      title: "Hotel",
+      confirmation_number: "ABC123",
+      metadata: { room: "suite" },
+    });
+    expect(m.addReservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tripId: 7,
+        type: "hotel",
+        title: "Hotel",
+        confirmationNumber: "ABC123",
+        metadata: { room: "suite" },
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, reservation_id: 9 });
+  });
+
+  it("list_reservations returns saved bookings for the active trip", async () => {
+    m.listReservations.mockResolvedValueOnce([
+      {
+        id: 9,
+        type: "hotel",
+        title: "Hotel",
+        provider: "Provider",
+        confirmationNumber: "ABC123",
+        startAt: new Date("2026-07-01T15:00:00Z"),
+        endAt: null,
+        address: "1 Main St",
+        status: "booked",
+        notes: null,
+      },
+    ]);
+    const result = await toolHandlers.list_reservations(ctx(7), {});
+    expect(m.listReservations).toHaveBeenCalledWith(7);
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 9,
+        type: "hotel",
+        confirmation_number: "ABC123",
+        start_at: "2026-07-01T15:00:00.000Z",
+      }),
+    ]);
+  });
+
+  it("update_reservation updates a booking in the active trip", async () => {
+    m.updateReservation.mockResolvedValueOnce({ id: 9, title: "Updated" });
+    const result = await toolHandlers.update_reservation(ctx(7), {
+      reservation_id: 9,
+      title: "Updated",
+      confirmation_number: "XYZ789",
+    });
+    expect(m.updateReservation).toHaveBeenCalledWith(
+      7,
+      9,
+      expect.objectContaining({ title: "Updated", confirmationNumber: "XYZ789" }),
+    );
+    expect(result).toMatchObject({ ok: true, reservation_id: 9 });
+  });
+
+  it("delete_reservation requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_reservation(ctx(7), { reservation_id: 9 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("delete_reservation deletes a confirmed booking in the active trip", async () => {
+    m.deleteReservation.mockResolvedValueOnce(true);
+    const result = await toolHandlers.delete_reservation(ctx(7), { reservation_id: 9, confirmed: true });
+    expect(m.deleteReservation).toHaveBeenCalledWith(7, 9);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("update_place updates a saved place in the active trip", async () => {
+    m.updatePlace.mockResolvedValueOnce({ id: 5, name: "Lake" });
+    const result = await toolHandlers.update_place(ctx(7), { place_id: 5, notes: "Go early" });
+    expect(m.updatePlace).toHaveBeenCalledWith(7, 5, { notes: "Go early" });
+    expect(result).toMatchObject({ ok: true, place_id: 5 });
+  });
+
+  it("delete_place requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_place(ctx(7), { place_id: 5 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("update_itinerary_item updates an item in the active trip", async () => {
+    m.updateItem.mockResolvedValueOnce({ id: 22, title: "Museum" });
+    const result = await toolHandlers.update_itinerary_item(ctx(7), {
+      item_id: 22,
+      title: "Museum",
+      is_backup: true,
+    });
+    expect(m.updateItem).toHaveBeenCalledWith(7, 22, { title: "Museum", isBackup: true });
+    expect(result).toMatchObject({ ok: true, item_id: 22 });
+  });
+
+  it("delete_itinerary_item requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_itinerary_item(ctx(7), { item_id: 22 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("delete_day deletes a confirmed day in the active trip", async () => {
+    m.deleteDay.mockResolvedValueOnce(true);
+    const result = await toolHandlers.delete_day(ctx(7), { day_number: 2, confirmed: true });
+    expect(m.deleteDay).toHaveBeenCalledWith(7, 2);
+    expect(result).toEqual({ ok: true });
   });
 });
 
@@ -126,5 +296,29 @@ describe("save_memory", () => {
 
     await toolHandlers.save_memory(ctx(7), { content: "vegetarian", global: true });
     expect(m.saveMemory).toHaveBeenLastCalledWith(expect.objectContaining({ tripId: null }));
+  });
+
+  it("replace_memory replaces a scoped memory", async () => {
+    m.replaceMemory.mockResolvedValueOnce({ id: 2, content: "likes museums" });
+    const result = await toolHandlers.replace_memory(ctx(7), {
+      memory_id: 1,
+      content: "likes museums",
+      kind: "preference",
+    });
+    expect(m.replaceMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ telegramId: 111, memoryId: 1, tripId: 7, content: "likes museums" }),
+    );
+    expect(result).toMatchObject({ ok: true, memory_id: 2 });
+  });
+
+  it("delete_memory requires explicit confirmation", async () => {
+    await expect(toolHandlers.delete_memory(ctx(7), { memory_id: 1 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("delete_memory deletes a confirmed scoped memory", async () => {
+    m.deleteMemory.mockResolvedValueOnce(true);
+    const result = await toolHandlers.delete_memory(ctx(7), { memory_id: 1, confirmed: true });
+    expect(m.deleteMemory).toHaveBeenCalledWith(111, 1, 7);
+    expect(result).toEqual({ ok: true });
   });
 });

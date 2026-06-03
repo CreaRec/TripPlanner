@@ -7,13 +7,14 @@ const { prismaMock } = vi.hoisted(() => ({
       findMany: vi.fn(),
       findFirst: vi.fn(),
       update: vi.fn(),
+      delete: vi.fn(),
     },
   },
 }));
 
 vi.mock("../db/prisma", () => ({ prisma: prismaMock }));
 
-import { createTrip, getTrip, listTrips, updateTrip } from "./trips";
+import { createTrip, deleteTrip, getTrip, listTrips, updateTrip } from "./trips";
 
 describe("createTrip", () => {
   it("creates a trip with BigInt owner id and parsed dates", async () => {
@@ -72,5 +73,21 @@ describe("updateTrip", () => {
       where: { id: 5 },
       data: { summary: "done" },
     });
+  });
+});
+
+describe("deleteTrip", () => {
+  it("returns false when the trip is not owned by the user", async () => {
+    prismaMock.trip.findFirst.mockResolvedValueOnce(null);
+    const result = await deleteTrip(111, 5);
+    expect(result).toBe(false);
+    expect(prismaMock.trip.delete).not.toHaveBeenCalled();
+  });
+
+  it("deletes an owned trip", async () => {
+    prismaMock.trip.findFirst.mockResolvedValueOnce({ id: 5 });
+    prismaMock.trip.delete.mockResolvedValueOnce({ id: 5 });
+    await expect(deleteTrip(111, 5)).resolves.toBe(true);
+    expect(prismaMock.trip.delete).toHaveBeenCalledWith({ where: { id: 5 } });
   });
 });

@@ -57,6 +57,7 @@ model Trip {
   messages      ConversationMessage[]
   memories      Memory[]
   planVersions  PlanVersion[]
+  reservations  Reservation[]
   activeForState AppState[]
 
   @@index([telegramId])
@@ -117,6 +118,29 @@ model ItineraryItem {
 
   @@index([dayId])
   @@map("itinerary_items")
+}
+
+model Reservation {
+  id                 Int      @id @default(autoincrement())
+  tripId             Int      @map("trip_id")
+  type               String
+  title              String
+  provider           String?
+  confirmationNumber String?  @map("confirmation_number")
+  startAt            DateTime? @map("start_at")
+  endAt              DateTime? @map("end_at")
+  address            String?
+  status             String?
+  notes              String?
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([tripId, type])
+  @@map("reservations")
 }
 
 model ConversationMessage {

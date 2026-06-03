@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   getTrip: vi.fn(),
   getItinerary: vi.fn(),
   searchMemories: vi.fn(),
+  listReservations: vi.fn(),
   extractMemories: vi.fn(),
   createTripHandler: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock("../services/messages", () => ({ recentMessages: h.recentMessages, saveM
 vi.mock("../services/trips", () => ({ getTrip: h.getTrip }));
 vi.mock("../services/itinerary", () => ({ getItinerary: h.getItinerary }));
 vi.mock("../services/memories", () => ({ searchMemories: h.searchMemories }));
+vi.mock("../services/reservations", () => ({ listReservations: h.listReservations }));
 vi.mock("./memory", () => ({ extractMemories: h.extractMemories }));
 vi.mock("./tools", () => ({
   toolDefinitions: [],
@@ -105,5 +107,30 @@ describe("runAgent", () => {
 
     const result = await runAgent(111, "go");
     expect(result.reply).toBe("Sorry, that failed.");
+  });
+
+  it("includes current reservations in the active trip context", async () => {
+    h.getActiveTripId.mockResolvedValueOnce(7);
+    h.getTrip.mockResolvedValueOnce({ id: 7, title: "Alps" });
+    h.searchMemories.mockResolvedValueOnce([]);
+    h.getItinerary.mockResolvedValueOnce([]);
+    h.listReservations.mockResolvedValueOnce([
+      {
+        type: "hotel",
+        title: "Hotel",
+        provider: "Booking",
+        confirmationNumber: "ABC123",
+        startAt: new Date("2026-07-01T15:00:00Z"),
+        endAt: null,
+      },
+    ]);
+    h.recentMessages.mockResolvedValueOnce([]);
+    h.createMock.mockResolvedValueOnce(assistant("Saved."));
+
+    await runAgent(111, "what is booked?");
+
+    const messages = h.createMock.mock.calls[0][0].messages;
+    expect(messages[1].content).toContain("Current reservations:");
+    expect(messages[1].content).toContain("[hotel] 2026-07-01T15:00Z: Hotel via Booking (confirmation: ABC123)");
   });
 });
