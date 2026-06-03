@@ -17,7 +17,7 @@ vi.mock("../db/prisma", () => ({ prisma: prismaMock }));
 import { addPlace, deletePlace, listPlaces, updatePlace } from "./places";
 
 describe("addPlace", () => {
-  it("creates a place with defaulted nullable fields", async () => {
+  it("creates a place with defaulted fields", async () => {
     prismaMock.place.create.mockResolvedValueOnce({ id: 1, name: "Lake" });
     await addPlace({ tripId: 3, name: "Lake", kidFriendly: true });
     const data = prismaMock.place.create.mock.calls[0][0].data;
@@ -25,11 +25,22 @@ describe("addPlace", () => {
       tripId: 3,
       name: "Lake",
       kidFriendly: true,
-      category: null,
+      category: "other",
       address: null,
       priority: null,
       durationMin: null,
       notes: null,
+    });
+  });
+
+  it("creates a place with a supported category", async () => {
+    prismaMock.place.create.mockResolvedValueOnce({ id: 2, name: "Bistro" });
+    await addPlace({ tripId: 3, name: "Bistro", category: "restaurant" });
+    const data = prismaMock.place.create.mock.calls.at(-1)?.[0].data;
+    expect(data).toMatchObject({
+      tripId: 3,
+      name: "Bistro",
+      category: "restaurant",
     });
   });
 });
@@ -56,10 +67,20 @@ describe("updatePlace", () => {
   it("updates only provided fields scoped to the trip", async () => {
     prismaMock.place.findFirst.mockResolvedValueOnce({ id: 9 });
     prismaMock.place.update.mockResolvedValueOnce({ id: 9, name: "Lake" });
-    await updatePlace(3, 9, { name: "Lake", priority: 1 });
+    await updatePlace(3, 9, { name: "Lake", category: "museum", priority: 1 });
     expect(prismaMock.place.update).toHaveBeenCalledWith({
       where: { id: 9 },
-      data: { name: "Lake", priority: 1 },
+      data: { name: "Lake", category: "museum", priority: 1 },
+    });
+  });
+
+  it("updates a null category to other", async () => {
+    prismaMock.place.findFirst.mockResolvedValueOnce({ id: 9 });
+    prismaMock.place.update.mockResolvedValueOnce({ id: 9, name: "Lake" });
+    await updatePlace(3, 9, { category: null });
+    expect(prismaMock.place.update).toHaveBeenCalledWith({
+      where: { id: 9 },
+      data: { category: "other" },
     });
   });
 });

@@ -1,7 +1,14 @@
 import type { Prisma } from "@prisma/client";
 import type OpenAI from "openai";
 import { createTrip, deleteTrip, getTrip, listTrips, updateTrip } from "../services/trips";
-import { addPlace, deletePlace, listPlaces, updatePlace } from "../services/places";
+import {
+  PLACE_CATEGORIES,
+  addPlace,
+  deletePlace,
+  listPlaces,
+  updatePlace,
+} from "../services/places";
+import type { PlaceCategory } from "../services/places";
 import {
   addItem,
   clearDay,
@@ -30,6 +37,8 @@ export interface AgentContext {
 
 type ToolHandler = (ctx: AgentContext, args: Record<string, unknown>) => Promise<unknown>;
 
+const PLACE_CATEGORY_VALUES = PLACE_CATEGORIES;
+
 function requireTrip(ctx: AgentContext): number {
   if (ctx.activeTripId === null) {
     throw new Error(
@@ -51,6 +60,17 @@ function requireInteger(value: unknown, name: string): number {
     throw new Error(`${name} must be an integer.`);
   }
   return number;
+}
+
+function requirePlaceCategory(value: unknown, name: string): PlaceCategory {
+  if (value === null) return "other";
+  if (
+    typeof value !== "string" ||
+    !PLACE_CATEGORY_VALUES.includes(value as (typeof PLACE_CATEGORY_VALUES)[number])
+  ) {
+    throw new Error(`${name} must be one of: ${PLACE_CATEGORY_VALUES.join(", ")}.`);
+  }
+  return value as PlaceCategory;
 }
 
 export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -217,7 +237,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: {
           name: { type: "string" },
-          category: { type: "string" },
+          category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
           priority: { type: "integer", description: "1 = highest priority." },
           duration_min: { type: "integer", description: "Typical visit length in minutes." },
@@ -246,7 +266,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: {
           place_id: { type: "integer" },
           name: { type: "string" },
-          category: { type: "string" },
+          category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
           priority: { type: "integer", description: "1 = highest priority." },
           duration_min: { type: "integer", description: "Typical visit length in minutes." },
@@ -534,7 +554,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const place = await addPlace({
       tripId,
       name: String(args.name),
-      category: (args.category as string) ?? null,
+      category:
+        args.category !== undefined ? requirePlaceCategory(args.category, "category") : null,
       address: (args.address as string) ?? null,
       priority: (args.priority as number) ?? null,
       durationMin: (args.duration_min as number) ?? null,
@@ -563,7 +584,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const tripId = requireTrip(ctx);
     const place = await updatePlace(tripId, requireInteger(args.place_id, "place_id"), {
       ...(args.name !== undefined ? { name: String(args.name) } : {}),
-      ...(args.category !== undefined ? { category: args.category as string } : {}),
+      ...(args.category !== undefined
+        ? { category: requirePlaceCategory(args.category, "category") }
+        : {}),
       ...(args.address !== undefined ? { address: args.address as string } : {}),
       ...(args.priority !== undefined ? { priority: requireInteger(args.priority, "priority") } : {}),
       ...(args.duration_min !== undefined

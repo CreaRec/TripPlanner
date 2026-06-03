@@ -38,6 +38,14 @@ vi.mock("../services/trips", () => ({
   updateTrip: m.updateTrip,
 }));
 vi.mock("../services/places", () => ({
+  PLACE_CATEGORIES: [
+    "restaurant",
+    "museum",
+    "natural_attraction",
+    "national_park",
+    "tour",
+    "other",
+  ],
   addPlace: m.addPlace,
   deletePlace: m.deletePlace,
   listPlaces: m.listPlaces,
@@ -109,6 +117,22 @@ describe("toolDefinitions", () => {
       ]),
     );
   });
+
+  it("restricts place categories to the supported values", () => {
+    const expectedCategories = [
+      "restaurant",
+      "museum",
+      "natural_attraction",
+      "national_park",
+      "tour",
+      "other",
+    ];
+    const addPlace = toolDefinitions.find((t) => t.function.name === "add_place");
+    const updatePlace = toolDefinitions.find((t) => t.function.name === "update_place");
+
+    expect((addPlace?.function.parameters as any).properties.category.enum).toEqual(expectedCategories);
+    expect((updatePlace?.function.parameters as any).properties.category.enum).toEqual(expectedCategories);
+  });
 });
 
 describe("create_trip", () => {
@@ -143,9 +167,40 @@ describe("requireTrip-guarded tools", () => {
 
   it("add_place works with an active trip", async () => {
     m.addPlace.mockResolvedValueOnce({ id: 5, name: "Lake" });
-    const result = await toolHandlers.add_place(ctx(7), { name: "Lake", kid_friendly: true });
-    expect(m.addPlace).toHaveBeenCalledWith(expect.objectContaining({ tripId: 7, name: "Lake", kidFriendly: true }));
+    const result = await toolHandlers.add_place(ctx(7), {
+      name: "Lake",
+      category: "natural_attraction",
+      kid_friendly: true,
+    });
+    expect(m.addPlace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tripId: 7,
+        name: "Lake",
+        category: "natural_attraction",
+        kidFriendly: true,
+      }),
+    );
     expect(result).toMatchObject({ ok: true, place_id: 5 });
+  });
+
+  it("add_place rejects unsupported categories", async () => {
+    m.addPlace.mockClear();
+    await expect(toolHandlers.add_place(ctx(7), { name: "Lake", category: "shopping" })).rejects.toThrow(
+      /category must be one of/,
+    );
+    expect(m.addPlace).not.toHaveBeenCalled();
+  });
+
+  it("add_place normalizes a null category to other", async () => {
+    m.addPlace.mockResolvedValueOnce({ id: 6, name: "Stop" });
+    await toolHandlers.add_place(ctx(7), { name: "Stop", category: null });
+    expect(m.addPlace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tripId: 7,
+        name: "Stop",
+        category: "other",
+      }),
+    );
   });
 
   it("add_reservation throws when there is no active trip", async () => {
@@ -229,8 +284,25 @@ describe("requireTrip-guarded tools", () => {
 
   it("update_place updates a saved place in the active trip", async () => {
     m.updatePlace.mockResolvedValueOnce({ id: 5, name: "Lake" });
-    const result = await toolHandlers.update_place(ctx(7), { place_id: 5, notes: "Go early" });
-    expect(m.updatePlace).toHaveBeenCalledWith(7, 5, { notes: "Go early" });
+    const result = await toolHandlers.update_place(ctx(7), {
+      place_id: 5,
+      category: "national_park",
+      notes: "Go early",
+    });
+    expect(m.updatePlace).toHaveBeenCalledWith(7, 5, {
+      category: "national_park",
+      notes: "Go early",
+    });
+    expect(result).toMatchObject({ ok: true, place_id: 5 });
+  });
+
+  it("update_place normalizes a null category to other", async () => {
+    m.updatePlace.mockResolvedValueOnce({ id: 5, name: "Lake" });
+    const result = await toolHandlers.update_place(ctx(7), {
+      place_id: 5,
+      category: null,
+    });
+    expect(m.updatePlace).toHaveBeenCalledWith(7, 5, { category: "other" });
     expect(result).toMatchObject({ ok: true, place_id: 5 });
   });
 

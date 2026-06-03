@@ -1,10 +1,22 @@
 import type { Place } from "@prisma/client";
 import { prisma } from "../db/prisma";
 
+export const PLACE_CATEGORIES = [
+  "restaurant",
+  "museum",
+  "natural_attraction",
+  "national_park",
+  "tour",
+  "other",
+] as const;
+
+export type PlaceCategory = (typeof PLACE_CATEGORIES)[number];
+export const DEFAULT_PLACE_CATEGORY: PlaceCategory = "other";
+
 export interface AddPlaceInput {
   tripId: number;
   name: string;
-  category?: string | null;
+  category?: PlaceCategory | null;
   address?: string | null;
   priority?: number | null;
   durationMin?: number | null;
@@ -14,7 +26,7 @@ export interface AddPlaceInput {
 
 export interface UpdatePlaceFields {
   name?: string;
-  category?: string | null;
+  category?: PlaceCategory | null;
   address?: string | null;
   priority?: number | null;
   durationMin?: number | null;
@@ -27,7 +39,7 @@ export async function addPlace(input: AddPlaceInput): Promise<Place> {
     data: {
       tripId: input.tripId,
       name: input.name,
-      category: input.category ?? null,
+      category: input.category ?? DEFAULT_PLACE_CATEGORY,
       address: input.address ?? null,
       priority: input.priority ?? null,
       durationMin: input.durationMin ?? null,
@@ -58,7 +70,7 @@ export async function updatePlace(
     where: { id: placeId },
     data: {
       ...(fields.name !== undefined ? { name: fields.name } : {}),
-      ...(fields.category !== undefined ? { category: fields.category } : {}),
+      ...(fields.category !== undefined ? { category: fields.category ?? DEFAULT_PLACE_CATEGORY } : {}),
       ...(fields.address !== undefined ? { address: fields.address } : {}),
       ...(fields.priority !== undefined ? { priority: fields.priority } : {}),
       ...(fields.durationMin !== undefined ? { durationMin: fields.durationMin } : {}),

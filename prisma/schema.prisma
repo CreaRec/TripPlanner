@@ -13,6 +13,15 @@ datasource db {
   extensions = [vector]
 }
 
+enum PlaceCategory {
+  restaurant
+  museum
+  natural_attraction
+  national_park
+  tour
+  other
+}
+
 model TgUser {
   telegramId BigInt   @id @map("telegram_id")
   name       String?
@@ -68,7 +77,7 @@ model Place {
   id          Int      @id @default(autoincrement())
   tripId      Int      @map("trip_id")
   name        String
-  category    String?
+  category    PlaceCategory @default(other)
   address     String?
   latitude    Float?
   longitude   Float?
