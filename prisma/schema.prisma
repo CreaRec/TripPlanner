@@ -1,0 +1,165 @@
+// Crea Trip Planner schema (source of truth for the database).
+// Vector ops on Memory.embedding use raw SQL because pgvector columns are
+// Unsupported() in Prisma's typed client.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+model TgUser {
+  telegramId BigInt   @id @map("telegram_id")
+  name       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  trips     Trip[]
+  appState  AppState?
+  memories  Memory[]
+  messages  ConversationMessage[]
+
+  @@map("tg_users")
+}
+
+model AppState {
+  telegramId   BigInt   @id @map("telegram_id")
+  activeTripId Int?     @map("active_trip_id")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user       TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+  activeTrip Trip?  @relation(fields: [activeTripId], references: [id], onDelete: SetNull)
+
+  @@map("app_state")
+}
+
+model Trip {
+  id          Int      @id @default(autoincrement())
+  telegramId  BigInt   @map("telegram_id")
+  title       String
+  destination String?
+  startDate   DateTime? @map("start_date") @db.Date
+  endDate     DateTime? @map("end_date") @db.Date
+  status      String   @default("planning")
+  travelers   String?
+  summary     String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user          TgUser                @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+  places        Place[]
+  days          ItineraryDay[]
+  messages      ConversationMessage[]
+  memories      Memory[]
+  planVersions  PlanVersion[]
+  activeForState AppState[]
+
+  @@index([telegramId])
+  @@map("trips")
+}
+
+model Place {
+  id          Int      @id @default(autoincrement())
+  tripId      Int      @map("trip_id")
+  name        String
+  category    String?
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  priority    Int?
+  durationMin Int?     @map("duration_min")
+  kidFriendly Boolean? @map("kid_friendly")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  trip  Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  items ItineraryItem[]
+
+  @@index([tripId])
+  @@map("places")
+}
+
+model ItineraryDay {
+  id        Int      @id @default(autoincrement())
+  tripId    Int      @map("trip_id")
+  dayNumber Int      @map("day_number")
+  date      DateTime? @db.Date
+  title     String?
+  summary   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  trip  Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  items ItineraryItem[]
+
+  @@unique([tripId, dayNumber])
+  @@index([tripId])
+  @@map("itinerary_days")
+}
+
+model ItineraryItem {
+  id        Int      @id @default(autoincrement())
+  dayId     Int      @map("day_id")
+  placeId   Int?     @map("place_id")
+  position  Int      @default(0)
+  title     String
+  timeBlock String?  @map("time_block")
+  notes     String?
+  isBackup  Boolean  @default(false) @map("is_backup")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  day   ItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  place Place?       @relation(fields: [placeId], references: [id], onDelete: SetNull)
+
+  @@index([dayId])
+  @@map("itinerary_items")
+}
+
+model ConversationMessage {
+  id         Int      @id @default(autoincrement())
+  telegramId BigInt   @map("telegram_id")
+  tripId     Int?     @map("trip_id")
+  role       String
+  content    String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+  trip Trip?  @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([telegramId, createdAt])
+  @@map("conversation_messages")
+}
+
+model Memory {
+  id         Int      @id @default(autoincrement())
+  telegramId BigInt   @map("telegram_id")
+  tripId     Int?     @map("trip_id")
+  kind       String   @default("fact")
+  content    String
+  // pgvector column. Not readable/writable via the typed client; use raw SQL.
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+  trip Trip?  @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  @@index([telegramId])
+  @@map("memories")
+}
+
+model PlanVersion {
+  id        Int      @id @default(autoincrement())
+  tripId    Int      @map("trip_id")
+  label     String?
+  snapshot  Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@map("plan_versions")
+}

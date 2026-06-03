@@ -1,0 +1,21 @@
+[Unit]
+Description=Crea Trip Planner Telegram bot
+# Postgres runs in Docker, so wait for Docker to be available.
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=__APP_DIR__/.env
+ExecStart=/usr/bin/env node dist/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-trip-planner
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+---
+description: Protect the non-Prisma-managed pgvector embedding column and ivfflat index in migrations
+globs: prisma/**
+alwaysApply: false
+---
+
+# Prisma + pgvector Migrations
+
+The `memories.embedding` column is declared as `Unsupported("vector(1536)")` and its ivfflat
+index (`idx_memories_embedding`) lives only in raw migration SQL. Neither is managed by Prisma.
+
+- Because the embedding column and its ivfflat index aren't Prisma-managed, review any future
+  `prisma migrate dev` output so it does not try to drop that index.
+- If a generated migration contains a `DROP INDEX ... idx_memories_embedding` (or drops/alters
+  the `embedding` column), remove that statement before applying the migration.
+- Keep the ivfflat index definition in the migration SQL:
+
+```sql
+CREATE INDEX IF NOT EXISTS "idx_memories_embedding"
+  ON "memories" USING ivfflat ("embedding" vector_cosine_ops) WITH (lists = 100);
+```
+
+- Prefer `prisma migrate dev --create-only` to inspect/edit generated SQL before it is applied.
