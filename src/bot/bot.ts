@@ -6,14 +6,22 @@ import { extractTravelInfoFromImage } from "../agent/vision";
 import { ensureUser } from "../services/users";
 
 async function sendAgentResult(
-  ctx: { reply: (text: string) => Promise<unknown>; replyWithDocument: (doc: { source: string }) => Promise<unknown> },
+  ctx: {
+    reply: (text: string) => Promise<unknown>;
+    replyWithDocument: (doc: { source: string }) => Promise<unknown>;
+    replyWithPhoto: (photo: { source: string }) => Promise<unknown>;
+  },
   result: Awaited<ReturnType<typeof runAgent>>,
 ): Promise<void> {
   if (result.reply) {
     await ctx.reply(result.reply);
   }
   for (const file of result.files) {
-    await ctx.replyWithDocument({ source: file });
+    if (file.toLowerCase().endsWith(".png")) {
+      await ctx.replyWithPhoto({ source: file });
+    } else {
+      await ctx.replyWithDocument({ source: file });
+    }
   }
 }
 

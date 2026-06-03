@@ -34,6 +34,8 @@ const m = vi.hoisted(() => ({
   saveInterestingPlace: vi.fn(),
   updateSavedPlace: vi.fn(),
   suggestSavedPlacesOnRoute: vi.fn(),
+  generateRouteComparisonMap: vi.fn(),
+  isStaticMapsConfigured: vi.fn(),
   setActiveTripId: vi.fn(),
 }));
 
@@ -96,6 +98,10 @@ vi.mock("../services/savedPlaces", () => ({
 }));
 vi.mock("../services/googleRoutes", () => ({
   suggestSavedPlacesOnRoute: m.suggestSavedPlacesOnRoute,
+}));
+vi.mock("../services/staticMaps", () => ({
+  generateRouteComparisonMap: m.generateRouteComparisonMap,
+  isStaticMapsConfigured: m.isStaticMapsConfigured,
 }));
 vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
 
@@ -222,6 +228,7 @@ describe("toolDefinitions", () => {
     expect(suggestRoute.description).toContain("both origin and destination");
     expect(suggestRoute.description).toContain("ask where they are starting from");
     expect((suggestRoute.parameters as any).properties.origin.description).toContain("Do not guess");
+    expect((suggestRoute.parameters as any).properties.stop_query.description).toContain("specific place");
   });
 });
 
@@ -368,15 +375,348 @@ describe("general interesting places", () => {
         maxDistanceFromRouteMeters: 40_000,
         maxRouteChecks: 10,
         maxDetourDurationSeconds: 1500,
+        includeRejectedSuggestions: false,
       }),
     );
-    expect(result).toEqual([
+    expect(result).toEqual(
       expect.objectContaining({
-        distance_from_route_km: 12.3,
-        detour_min: 15,
-        detour_km: 18.2,
+        maps_requested: false,
+        maps_generated_count: 0,
+        suggestions: [
+          expect.objectContaining({
+            distance_from_route_km: 12.3,
+            detour_min: 15,
+            detour_km: 18.2,
+          }),
+        ],
       }),
+    );
+  });
+
+  it("attaches comparison maps for top route suggestions when requested", async () => {
+    const first = savedPlace({ id: 77, name: "Urban Hill" });
+    const second = savedPlace({ id: 78, name: "Moki Dugway" });
+    m.listSavedPlaces.mockResolvedValueOnce([first, second]);
+    m.isStaticMapsConfigured.mockReturnValueOnce(true);
+    m.generateRouteComparisonMap.mockResolvedValueOnce("/tmp/urban-hill.png");
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([
+      {
+        place: first,
+        origin: "Austin, TX",
+        destination: "Moab, UT",
+        startLocation: { latitude: 30.2672, longitude: -97.7431 },
+        stopLocation: { latitude: 40.7608, longitude: -111.891 },
+        endLocation: { latitude: 38.5733, longitude: -109.5498 },
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "detour-polyline",
+        distanceFromRouteMeters: 4_000,
+        detourDurationSeconds: 240,
+        detourDistanceMeters: 3_200,
+        detourRatio: 0.01,
+        withinDetourThreshold: true,
+        routeDurationSeconds: 30_240,
+        routeDistanceMeters: 1_003_200,
+      },
+      {
+        place: second,
+        origin: "Austin, TX",
+        destination: "Moab, UT",
+        startLocation: { latitude: 30.2672, longitude: -97.7431 },
+        stopLocation: { latitude: 37.274, longitude: -109.942 },
+        endLocation: { latitude: 38.5733, longitude: -109.5498 },
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "detour-polyline-2",
+        distanceFromRouteMeters: 30_000,
+        detourDurationSeconds: 1_200,
+        detourDistanceMeters: 20_000,
+        detourRatio: 0.04,
+        withinDetourThreshold: true,
+        routeDurationSeconds: 31_200,
+        routeDistanceMeters: 1_020_000,
+      },
     ]);
+
+    const c = ctx(null);
+    const result = await toolHandlers.suggest_saved_places_on_route(c, {
+      origin: "Austin, TX",
+      destination: "Moab, UT",
+      include_maps: true,
+      max_maps: 1,
+    });
+
+    expect(m.suggestSavedPlacesOnRoute).toHaveBeenCalledWith(
+      "Austin, TX",
+      "Moab, UT",
+      [first, second],
+      expect.objectContaining({ includeRejectedSuggestions: true }),
+    );
+
+    expect(m.generateRouteComparisonMap).toHaveBeenCalledTimes(1);
+    expect(m.generateRouteComparisonMap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        origin: "Austin, TX",
+        destination: "Moab, UT",
+        stopName: "Urban Hill",
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "detour-polyline",
+      }),
+    );
+    expect(c.exports).toEqual(["/tmp/urban-hill.png"]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        maps_requested: true,
+        maps_generated_count: 1,
+        attached_files: ["/tmp/urban-hill.png"],
+        instruction: "You may say the comparison map is attached.",
+        suggestions: [
+          expect.objectContaining({
+            comparison_map_requested: true,
+            comparison_map_generated: true,
+            comparison_map_file: "/tmp/urban-hill.png",
+          }),
+          expect.objectContaining({
+            comparison_map_requested: true,
+            comparison_map_generated: false,
+            comparison_map_file: null,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("uses an explicit stop query instead of saved-place candidates for route comparison maps", async () => {
+    m.searchPlaceDetails.mockResolvedValueOnce([
+      {
+        provider: "google_places",
+        externalId: "dallas",
+        name: "Dallas",
+        category: "other",
+        address: "Dallas, TX, USA",
+        latitude: 32.7767,
+        longitude: -96.797,
+        mapsUrl: "https://maps.google.com/?cid=dallas",
+        types: ["locality"],
+      },
+    ]);
+    m.isStaticMapsConfigured.mockReturnValueOnce(true);
+    m.generateRouteComparisonMap.mockResolvedValueOnce("/tmp/dallas.png");
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([
+      {
+        place: savedPlace({
+          id: -1,
+          name: "Dallas",
+          address: "Dallas, TX, USA",
+          latitude: 32.7767,
+          longitude: -96.797,
+        }),
+        origin: "Austin, TX",
+        destination: "Houston, TX",
+        startLocation: { latitude: 30.2672, longitude: -97.7431 },
+        stopLocation: { latitude: 32.7767, longitude: -96.797 },
+        endLocation: { latitude: 29.7604, longitude: -95.3698 },
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "dallas-detour-polyline",
+        distanceFromRouteMeters: 250_000,
+        detourDurationSeconds: 7_200,
+        detourDistanceMeters: 300_000,
+        detourRatio: 1.5,
+        withinDetourThreshold: false,
+        routeDurationSeconds: 12_000,
+        routeDistanceMeters: 600_000,
+      },
+    ]);
+
+    const c = ctx(null);
+    const result = await toolHandlers.suggest_saved_places_on_route(c, {
+      origin: "Austin, TX",
+      destination: "Houston, TX",
+      stop_query: "Dallas",
+      include_maps: true,
+      max_maps: 1,
+    });
+
+    expect(m.listSavedPlaces).not.toHaveBeenCalled();
+    expect(m.searchPlaceDetails).toHaveBeenCalledWith({
+      query: "Dallas",
+      destination: null,
+      maxResults: 1,
+    });
+    expect(m.suggestSavedPlacesOnRoute).toHaveBeenCalledWith(
+      "Austin, TX",
+      "Houston, TX",
+      [
+        expect.objectContaining({
+          id: -1,
+          name: "Dallas",
+          latitude: 32.7767,
+          longitude: -96.797,
+        }),
+      ],
+      expect.objectContaining({
+        maxDistanceFromRouteMeters: Number.POSITIVE_INFINITY,
+        includeRejectedSuggestions: true,
+      }),
+    );
+    expect(m.generateRouteComparisonMap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stopName: "Dallas",
+        stopLocation: { latitude: 32.7767, longitude: -96.797 },
+        detourEncodedPolyline: "dallas-detour-polyline",
+      }),
+    );
+    expect(c.exports).toEqual(["/tmp/dallas.png"]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        maps_generated_count: 1,
+        suggestions: [expect.objectContaining({ within_detour_threshold: false })],
+      }),
+    );
+  });
+
+  it("falls back to destination-biased stop search only when direct stop search has no result", async () => {
+    m.searchPlaceDetails
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          provider: "google_places",
+          externalId: "space-center",
+          name: "Space Center Houston",
+          category: "museum",
+          address: "1601 E NASA Pkwy, Houston, TX",
+          latitude: 29.5518,
+          longitude: -95.0981,
+          mapsUrl: "https://maps.google.com/?cid=space",
+          types: ["museum"],
+        },
+      ]);
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([]);
+
+    await toolHandlers.suggest_saved_places_on_route(ctx(null), {
+      origin: "Austin, TX",
+      destination: "Houston, TX",
+      stop_query: "space center",
+      include_maps: true,
+    });
+
+    expect(m.searchPlaceDetails).toHaveBeenNthCalledWith(1, {
+      query: "space center",
+      destination: null,
+      maxResults: 1,
+    });
+    expect(m.searchPlaceDetails).toHaveBeenNthCalledWith(2, {
+      query: "space center",
+      destination: "Houston, TX",
+      maxResults: 1,
+    });
+  });
+
+  it("keeps route suggestions when comparison map generation fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const place = savedPlace({ id: 77, name: "Urban Hill" });
+    m.listSavedPlaces.mockResolvedValueOnce([place]);
+    m.isStaticMapsConfigured.mockReturnValueOnce(true);
+    m.generateRouteComparisonMap.mockRejectedValueOnce(new Error("Google Static Maps API request failed (413)"));
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([
+      {
+        place,
+        origin: "Austin, TX",
+        destination: "Moab, UT",
+        startLocation: { latitude: 30.2672, longitude: -97.7431 },
+        stopLocation: { latitude: 40.7608, longitude: -111.891 },
+        endLocation: { latitude: 38.5733, longitude: -109.5498 },
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "detour-polyline",
+        distanceFromRouteMeters: 4_000,
+        detourDurationSeconds: 240,
+        detourDistanceMeters: 3_200,
+        detourRatio: 0.01,
+        withinDetourThreshold: false,
+        routeDurationSeconds: 30_240,
+        routeDistanceMeters: 1_003_200,
+      },
+    ]);
+
+    const c = ctx(null);
+    const result = await toolHandlers.suggest_saved_places_on_route(c, {
+      origin: "Austin, TX",
+      destination: "Moab, UT",
+      include_maps: true,
+    });
+
+    expect(c.exports).toEqual([]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        maps_requested: true,
+        maps_generated_count: 0,
+        attached_files: [],
+        instruction: expect.stringContaining("Do not say a comparison map is attached"),
+        suggestions: [
+          expect.objectContaining({
+            place: expect.objectContaining({ name: "Urban Hill" }),
+            comparison_map_requested: true,
+            comparison_map_generated: false,
+            comparison_map_file: null,
+            comparison_map_error: "Google Static Maps API request failed (413)",
+            within_detour_threshold: false,
+          }),
+        ],
+      }),
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      "[static-maps] route comparison map failed",
+      expect.objectContaining({ placeId: 77 }),
+    );
+    consoleError.mockRestore();
+  });
+
+  it("reports when maps are requested but Static Maps is not configured", async () => {
+    const place = savedPlace({ id: 77, name: "Urban Hill" });
+    m.listSavedPlaces.mockResolvedValueOnce([place]);
+    m.isStaticMapsConfigured.mockReturnValueOnce(false);
+    m.suggestSavedPlacesOnRoute.mockResolvedValueOnce([
+      {
+        place,
+        origin: "Austin, TX",
+        destination: "Moab, UT",
+        startLocation: { latitude: 30.2672, longitude: -97.7431 },
+        stopLocation: { latitude: 40.7608, longitude: -111.891 },
+        endLocation: { latitude: 38.5733, longitude: -109.5498 },
+        baseEncodedPolyline: "base-polyline",
+        detourEncodedPolyline: "detour-polyline",
+        distanceFromRouteMeters: 4_000,
+        detourDurationSeconds: 240,
+        detourDistanceMeters: 3_200,
+        detourRatio: 0.01,
+        withinDetourThreshold: false,
+        routeDurationSeconds: 30_240,
+        routeDistanceMeters: 1_003_200,
+      },
+    ]);
+
+    const c = ctx(null);
+    const result = await toolHandlers.suggest_saved_places_on_route(c, {
+      origin: "Austin, TX",
+      destination: "Moab, UT",
+      include_maps: true,
+    });
+
+    expect(m.generateRouteComparisonMap).not.toHaveBeenCalled();
+    expect(c.exports).toEqual([]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        maps_requested: true,
+        maps_generated_count: 0,
+        attached_files: [],
+        suggestions: [
+          expect.objectContaining({
+            comparison_map_requested: true,
+            comparison_map_generated: false,
+            comparison_map_file: null,
+            comparison_map_error: "GOOGLE_MAPS_API_KEY is not configured for Static Maps.",
+          }),
+        ],
+      }),
+    );
   });
 });
 

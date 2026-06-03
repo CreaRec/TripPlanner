@@ -39,6 +39,7 @@ import {
 } from "../services/savedPlaces";
 import type { SavedPlace, SavedPlaceStatus } from "../services/savedPlaces";
 import { suggestSavedPlacesOnRoute } from "../services/googleRoutes";
+import { generateRouteComparisonMap, isStaticMapsConfigured } from "../services/staticMaps";
 import { setActiveTripId } from "../services/users";
 
 export interface AgentContext {
@@ -471,6 +472,11 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: {
           origin: { type: "string", description: "Route start address/place/city. Do not guess this." },
           destination: { type: "string", description: "Route end address/place/city. Do not guess this." },
+          stop_query: {
+            type: "string",
+            description:
+              "Specific stop/place to compare as a detour, e.g. 'Dallas' or 'Space Center Houston'. Use this when the user explicitly says they want to go via a specific place.",
+          },
           status: { type: "string", enum: SAVED_PLACE_STATUS_VALUES },
           category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           max_distance_from_route_km: {
@@ -488,6 +494,15 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           max_detour_ratio: {
             type: "number",
             description: "Maximum extra driving time as a fraction of base route duration. Default is 0.15.",
+          },
+          include_maps: {
+            type: "boolean",
+            description:
+              "If true, generate Google Static Maps PNG comparisons for top suggestions and attach them to the chat.",
+          },
+          max_maps: {
+            type: "integer",
+            description: "Maximum number of comparison maps to attach. Default is 3, hard limit is 3.",
           },
         },
         required: ["origin", "destination"],
@@ -717,6 +732,40 @@ function savedPlaceToToolResult(place: SavedPlace) {
     kid_friendly: place.kidFriendly,
     source_note: place.sourceNote,
     notes: place.notes,
+  };
+}
+
+function temporarySavedPlaceFromSearchResult(
+  telegramId: number,
+  place: Awaited<ReturnType<typeof searchPlaceDetails>>[number],
+): SavedPlace {
+  return {
+    id: -1,
+    telegramId: BigInt(telegramId),
+    name: place.name,
+    category: place.category,
+    address: place.address,
+    latitude: place.latitude,
+    longitude: place.longitude,
+    externalProvider: place.provider,
+    externalId: place.externalId,
+    websiteUrl: null,
+    mapsUrl: place.mapsUrl,
+    phone: null,
+    bookingUrl: null,
+    ticketUrl: null,
+    reservationRecommended: false,
+    openingHours: null,
+    rating: null,
+    priceLevel: null,
+    priority: null,
+    durationMin: null,
+    kidFriendly: null,
+    status: "temporary",
+    sourceNote: "Temporary route comparison stop",
+    notes: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
   };
 }
 
@@ -1003,19 +1052,38 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async suggest_saved_places_on_route(ctx, args) {
-    const places = await listSavedPlaces(ctx.telegramId, {
-      status: args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : "want_to_visit",
-      category:
-        args.category !== undefined ? requirePlaceCategory(args.category, "category") : undefined,
-      withCoordinatesOnly: true,
-    });
+    const stopQuery = typeof args.stop_query === "string" && args.stop_query.trim() ? args.stop_query.trim() : null;
+    let places: SavedPlace[];
+    if (stopQuery) {
+      let candidates = await searchPlaceDetails({
+        query: stopQuery,
+        destination: null,
+        maxResults: 1,
+      });
+      if (candidates.length === 0) {
+        candidates = await searchPlaceDetails({
+          query: stopQuery,
+          destination: String(args.destination),
+          maxResults: 1,
+        });
+      }
+      const stop = candidates.find((p) => p.latitude !== null && p.longitude !== null);
+      places = stop ? [temporarySavedPlaceFromSearchResult(ctx.telegramId, stop)] : [];
+    } else {
+      places = await listSavedPlaces(ctx.telegramId, {
+        status: args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : "want_to_visit",
+        category:
+          args.category !== undefined ? requirePlaceCategory(args.category, "category") : undefined,
+        withCoordinatesOnly: true,
+      });
+    }
     const suggestions = await suggestSavedPlacesOnRoute(
       String(args.origin),
       String(args.destination),
       places,
       {
         maxDistanceFromRouteMeters:
-          args.max_distance_from_route_km !== undefined
+          stopQuery ? Number.POSITIVE_INFINITY : args.max_distance_from_route_km !== undefined
             ? Number(args.max_distance_from_route_km) * 1000
             : undefined,
         maxRouteChecks:
@@ -1025,17 +1093,75 @@ export const toolHandlers: Record<string, ToolHandler> = {
         maxDetourDurationSeconds:
           args.max_detour_min !== undefined ? requireInteger(args.max_detour_min, "max_detour_min") * 60 : undefined,
         maxDetourRatio: args.max_detour_ratio !== undefined ? Number(args.max_detour_ratio) : undefined,
+        includeRejectedSuggestions: Boolean(args.include_maps) || Boolean(stopQuery),
       },
     );
-    return suggestions.map((s) => ({
+    const includeMaps = Boolean(args.include_maps);
+    const maxMaps =
+      args.max_maps !== undefined
+        ? Math.min(3, Math.max(0, requireInteger(args.max_maps, "max_maps")))
+        : 3;
+    const mapFiles = new Map<number, string>();
+    const mapErrors = new Map<number, string>();
+    if (includeMaps && maxMaps > 0) {
+      const mapCandidates = suggestions.slice(0, maxMaps);
+      if (!isStaticMapsConfigured()) {
+        for (const suggestion of mapCandidates) {
+          mapErrors.set(suggestion.place.id, "GOOGLE_MAPS_API_KEY is not configured for Static Maps.");
+        }
+      } else {
+        for (const suggestion of mapCandidates) {
+          if (!suggestion.detourEncodedPolyline) continue;
+          try {
+            const file = await generateRouteComparisonMap({
+              origin: suggestion.origin,
+              destination: suggestion.destination,
+              stopName: suggestion.place.name,
+              startLocation: suggestion.startLocation,
+              stopLocation: suggestion.stopLocation,
+              endLocation: suggestion.endLocation,
+              baseEncodedPolyline: suggestion.baseEncodedPolyline,
+              detourEncodedPolyline: suggestion.detourEncodedPolyline,
+              detourDurationSeconds: suggestion.detourDurationSeconds,
+              detourDistanceMeters: suggestion.detourDistanceMeters,
+            });
+            ctx.exports.push(file);
+            mapFiles.set(suggestion.place.id, file);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("[static-maps] route comparison map failed", {
+              placeId: suggestion.place.id,
+              error: message,
+            });
+            mapErrors.set(suggestion.place.id, message);
+          }
+        }
+      }
+    }
+    const mappedSuggestions = suggestions.map((s) => ({
       place: savedPlaceToToolResult(s.place),
       distance_from_route_km: Math.round((s.distanceFromRouteMeters / 1000) * 10) / 10,
       detour_min: Math.round(s.detourDurationSeconds / 60),
       detour_km: Math.round((s.detourDistanceMeters / 1000) * 10) / 10,
       detour_ratio: Math.round(s.detourRatio * 1000) / 1000,
+      within_detour_threshold: s.withinDetourThreshold,
       route_duration_min: Math.round(s.routeDurationSeconds / 60),
       route_distance_km: Math.round((s.routeDistanceMeters / 1000) * 10) / 10,
+      comparison_map_requested: includeMaps,
+      comparison_map_generated: mapFiles.has(s.place.id),
+      comparison_map_file: mapFiles.get(s.place.id) ?? null,
+      comparison_map_error: mapErrors.get(s.place.id) ?? null,
     }));
+    return {
+      suggestions: mappedSuggestions,
+      maps_requested: includeMaps,
+      maps_generated_count: mapFiles.size,
+      attached_files: [...mapFiles.values()],
+      instruction:
+        mapFiles.size > 0
+          ? "You may say the comparison map is attached."
+          : "Do not say a comparison map is attached. If the user asked for a map, explain that no map image was generated and use comparison_map_error if present.",
+    };
   },
 
   async add_reservation(ctx, args) {

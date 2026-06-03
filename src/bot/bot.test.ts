@@ -78,6 +78,7 @@ function fakeCtx(overrides: Record<string, unknown> = {}) {
     reply: vi.fn(),
     sendChatAction: vi.fn(),
     replyWithDocument: vi.fn(),
+    replyWithPhoto: vi.fn(),
     ...overrides,
   };
 }
@@ -148,6 +149,14 @@ describe("text handler", () => {
     expect(f.runAgent).toHaveBeenCalledWith(111, "plan my trip");
     expect(ctx.reply).toHaveBeenCalledWith("Here is your plan");
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/p.pdf" });
+  });
+
+  it("sends generated PNG files as photos", async () => {
+    f.runAgent.mockResolvedValueOnce({ reply: "Map ready", files: ["/tmp/route.png"] });
+    const ctx = fakeCtx({ message: { text: "show map" } });
+    await handler("text")(ctx);
+    expect(ctx.replyWithPhoto).toHaveBeenCalledWith({ source: "/tmp/route.png" });
+    expect(ctx.replyWithDocument).not.toHaveBeenCalled();
   });
 
   it("ignores unknown slash commands", async () => {

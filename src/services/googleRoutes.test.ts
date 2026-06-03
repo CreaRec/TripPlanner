@@ -57,7 +57,13 @@ describe("suggestSavedPlacesOnRoute", () => {
       )
       .mockResolvedValueOnce(
         jsonResponse({
-          routes: [{ duration: "36900s", distanceMeters: 1_018_000 }],
+          routes: [
+            {
+              duration: "36900s",
+              distanceMeters: 1_018_000,
+              polyline: { encodedPolyline: "detour-polyline" },
+            },
+          ],
         }),
       );
 
@@ -81,8 +87,62 @@ describe("suggestSavedPlacesOnRoute", () => {
     expect(suggestions).toHaveLength(1);
     expect(suggestions[0]).toMatchObject({
       place: expect.objectContaining({ id: 1 }),
+      origin: "Portland, OR",
+      destination: "San Francisco, CA",
+      baseEncodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@",
+      detourEncodedPolyline: "detour-polyline",
+      stopLocation: { latitude: 40.7, longitude: -120.95 },
       detourDurationSeconds: 900,
       detourDistanceMeters: 18_000,
+      withinDetourThreshold: true,
     });
+  });
+
+  it("can return large detours when explicitly requested", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          routes: [
+            {
+              duration: "36000s",
+              distanceMeters: 1_000_000,
+              polyline: { encodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          routes: [
+            {
+              duration: "45000s",
+              distanceMeters: 1_200_000,
+              polyline: { encodedPolyline: "large-detour-polyline" },
+            },
+          ],
+        }),
+      );
+
+    const suggestions = await suggestSavedPlacesOnRoute(
+      "Portland, OR",
+      "San Francisco, CA",
+      [savedPlace(1, 40.7, -120.95)],
+      {
+        apiKey: "test-key",
+        fetchImpl,
+        maxDistanceFromRouteMeters: 50_000,
+        includeRejectedSuggestions: true,
+      },
+    );
+
+    expect(suggestions).toEqual([
+      expect.objectContaining({
+        place: expect.objectContaining({ id: 1 }),
+        detourDurationSeconds: 9000,
+        withinDetourThreshold: false,
+        detourEncodedPolyline: "large-detour-polyline",
+      }),
+    ]);
   });
 });

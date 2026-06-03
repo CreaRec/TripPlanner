@@ -7,8 +7,8 @@ import {
 } from "./routeGeometry";
 
 const GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes";
-const BASE_ROUTE_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline";
-const DETOUR_ROUTE_FIELD_MASK = "routes.duration,routes.distanceMeters";
+const ROUTE_WITH_POLYLINE_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline";
+const ROUTE_SUMMARY_FIELD_MASK = "routes.duration,routes.distanceMeters";
 
 type FetchLike = typeof fetch;
 
@@ -22,6 +22,7 @@ export interface RouteScoringOptions extends GoogleRoutesClientOptions {
   maxRouteChecks?: number;
   maxDetourDurationSeconds?: number;
   maxDetourRatio?: number;
+  includeRejectedSuggestions?: boolean;
 }
 
 export interface RouteSummary {
@@ -32,10 +33,18 @@ export interface RouteSummary {
 
 export interface SavedPlaceRouteSuggestion {
   place: SavedPlace;
+  origin: string;
+  destination: string;
+  startLocation: LatLng;
+  stopLocation: LatLng;
+  endLocation: LatLng;
+  baseEncodedPolyline: string;
+  detourEncodedPolyline: string | null;
   distanceFromRouteMeters: number;
   detourDurationSeconds: number;
   detourDistanceMeters: number;
   detourRatio: number;
+  withinDetourThreshold: boolean;
   routeDurationSeconds: number;
   routeDistanceMeters: number;
 }
@@ -135,7 +144,7 @@ async function computeRoute(
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask": includePolyline ? BASE_ROUTE_FIELD_MASK : DETOUR_ROUTE_FIELD_MASK,
+      "X-Goog-FieldMask": includePolyline ? ROUTE_WITH_POLYLINE_FIELD_MASK : ROUTE_SUMMARY_FIELD_MASK,
     },
     body: JSON.stringify({
       origin: waypointFromAddress(origin),
@@ -165,6 +174,7 @@ export async function suggestSavedPlacesOnRoute(
   const maxRouteChecks = options.maxRouteChecks ?? 15;
   const maxDetourDurationSeconds = options.maxDetourDurationSeconds ?? 30 * 60;
   const maxDetourRatio = options.maxDetourRatio ?? 0.15;
+  const includeRejectedSuggestions = options.includeRejectedSuggestions ?? false;
 
   const baseRoute = await computeRoute(origin, destination, {
     ...options,
@@ -175,6 +185,11 @@ export async function suggestSavedPlacesOnRoute(
   }
 
   const routeLine = decodeEncodedPolyline(baseRoute.encodedPolyline);
+  const startLocation = routeLine[0];
+  const endLocation = routeLine.at(-1);
+  if (!startLocation || !endLocation) {
+    throw new Error("Google Routes encoded polyline did not include route endpoints.");
+  }
   const candidates = savedPlaces
     .map((place) => {
       const location = savedPlaceLocation(place);
@@ -196,19 +211,28 @@ export async function suggestSavedPlacesOnRoute(
     const detourRoute = await computeRoute(origin, destination, {
       ...options,
       waypoint: candidate.location,
-      includePolyline: false,
+      includePolyline: true,
     });
     const detourDurationSeconds = detourRoute.durationSeconds - baseRoute.durationSeconds;
     const detourDistanceMeters = detourRoute.distanceMeters - baseRoute.distanceMeters;
     const detourRatio = baseRoute.durationSeconds > 0 ? detourDurationSeconds / baseRoute.durationSeconds : 0;
 
-    if (detourDurationSeconds <= maxDetourDurationSeconds || detourRatio <= maxDetourRatio) {
+    const withinDetourThreshold = detourDurationSeconds <= maxDetourDurationSeconds || detourRatio <= maxDetourRatio;
+    if (withinDetourThreshold || includeRejectedSuggestions) {
       suggestions.push({
         place: candidate.place,
+        origin,
+        destination,
+        startLocation,
+        stopLocation: candidate.location,
+        endLocation,
+        baseEncodedPolyline: baseRoute.encodedPolyline,
+        detourEncodedPolyline: detourRoute.encodedPolyline,
         distanceFromRouteMeters: candidate.distanceFromRouteMeters,
         detourDurationSeconds,
         detourDistanceMeters,
         detourRatio,
+        withinDetourThreshold,
         routeDurationSeconds: detourRoute.durationSeconds,
         routeDistanceMeters: detourRoute.distanceMeters,
       });

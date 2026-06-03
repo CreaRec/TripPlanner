@@ -7,4 +7,23 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("ask where they are starting from");
     expect(SYSTEM_PROMPT).toContain("Missing origin/destination is not an API failure");
   });
+
+  it("generates Static Maps only for visual route comparison requests", () => {
+    expect(SYSTEM_PROMPT).toContain("include_maps=true");
+    expect(SYSTEM_PROMPT).toContain("picture/map/image");
+    expect(SYSTEM_PROMPT).toContain("Do not generate Static Maps images unless the user asks");
+  });
+
+  it("uses explicit stop_query when the user names a detour stop", () => {
+    expect(SYSTEM_PROMPT).toContain("stop_query");
+    expect(SYSTEM_PROMPT).toContain("Do not substitute a saved place candidate");
+  });
+
+  it("does not claim a map is attached unless generation succeeded", () => {
+    expect(SYSTEM_PROMPT).toContain("Only say a comparison map is attached");
+    expect(SYSTEM_PROMPT).toContain("comparison_map_generated=true");
+    expect(SYSTEM_PROMPT).toContain("image was not generated");
+    expect(SYSTEM_PROMPT).toContain("maps_generated_count is 0");
+    expect(SYSTEM_PROMPT).toContain("attached_files is empty");
+  });
 });
