@@ -25,6 +25,7 @@ const schema = z.object({
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   OPENAI_VISION_MODEL: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   DATA_DIR: z.string().default("./data/exports"),
 });
@@ -36,6 +37,7 @@ export interface AppConfig {
   openaiModel: string;
   openaiVisionModel: string;
   embeddingModel: string;
+  googleMapsApiKey?: string;
   databaseUrl: string;
   dataDir: string;
 }
@@ -49,6 +51,7 @@ function build(): AppConfig {
     openaiModel: parsed.OPENAI_MODEL,
     openaiVisionModel: parsed.OPENAI_VISION_MODEL ?? parsed.OPENAI_MODEL,
     embeddingModel: parsed.EMBEDDING_MODEL,
+    googleMapsApiKey: parsed.GOOGLE_MAPS_API_KEY,
     databaseUrl: parsed.DATABASE_URL,
     dataDir: parsed.DATA_DIR,
   };

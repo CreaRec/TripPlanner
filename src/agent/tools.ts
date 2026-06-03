@@ -26,6 +26,10 @@ import {
   updateReservation,
 } from "../services/reservations";
 import { exportItineraryCsv, exportItineraryPdf } from "../services/export";
+import {
+  enrichPlace,
+  searchPlaceDetails,
+} from "../services/placeEnrichment";
 import { setActiveTripId } from "../services/users";
 
 export interface AgentContext {
@@ -239,6 +243,16 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           name: { type: "string" },
           category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
+          latitude: { type: "number" },
+          longitude: { type: "number" },
+          website_url: { type: "string" },
+          maps_url: { type: "string" },
+          phone: { type: "string" },
+          booking_url: { type: "string" },
+          ticket_url: { type: "string" },
+          reservation_recommended: { type: "boolean" },
+          rating: { type: "number" },
+          price_level: { type: "integer" },
           priority: { type: "integer", description: "1 = highest priority." },
           duration_min: { type: "integer", description: "Typical visit length in minutes." },
           kid_friendly: { type: "boolean" },
@@ -259,6 +273,39 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "search_place_details",
+      description:
+        "Search Google Places for richer details about a place without saving anything. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place when updating an existing saved place.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Place name or search query." },
+          max_results: { type: "integer", description: "Maximum number of candidates to return." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "enrich_place",
+      description:
+        "Enrich an existing saved place with Google Places details: address, coordinates, links, hours/rating, and booking or ticket advice. If search_place_details returned one clear match for this saved place, call enrich_place with the existing place_id and that result's external_id.",
+      parameters: {
+        type: "object",
+        properties: {
+          place_id: { type: "integer" },
+          query: { type: "string", description: "Optional search query if the saved name is too vague." },
+          external_id: { type: "string", description: "Google Places id from search_place_details." },
+        },
+        required: ["place_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_place",
       description: "Update a saved place for the active trip.",
       parameters: {
@@ -268,6 +315,16 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           name: { type: "string" },
           category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
+          latitude: { type: "number" },
+          longitude: { type: "number" },
+          website_url: { type: "string" },
+          maps_url: { type: "string" },
+          phone: { type: "string" },
+          booking_url: { type: "string" },
+          ticket_url: { type: "string" },
+          reservation_recommended: { type: "boolean" },
+          rating: { type: "number" },
+          price_level: { type: "integer" },
           priority: { type: "integer", description: "1 = highest priority." },
           duration_min: { type: "integer", description: "Typical visit length in minutes." },
           kid_friendly: { type: "boolean" },
@@ -368,11 +425,15 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "clear_day",
-      description: "Remove all items from a day before replanning it.",
+      description:
+        "Remove all items from a day before replanning it. Only call after explicit user confirmation.",
       parameters: {
         type: "object",
-        properties: { day_number: { type: "integer" } },
-        required: ["day_number"],
+        properties: {
+          day_number: { type: "integer" },
+          confirmed: { type: "boolean", description: "Must be true after explicit user confirmation." },
+        },
+        required: ["day_number", "confirmed"],
       },
     },
   },
@@ -557,6 +618,16 @@ export const toolHandlers: Record<string, ToolHandler> = {
       category:
         args.category !== undefined ? requirePlaceCategory(args.category, "category") : null,
       address: (args.address as string) ?? null,
+      latitude: (args.latitude as number) ?? null,
+      longitude: (args.longitude as number) ?? null,
+      websiteUrl: (args.website_url as string) ?? null,
+      mapsUrl: (args.maps_url as string) ?? null,
+      phone: (args.phone as string) ?? null,
+      bookingUrl: (args.booking_url as string) ?? null,
+      ticketUrl: (args.ticket_url as string) ?? null,
+      reservationRecommended: (args.reservation_recommended as boolean) ?? null,
+      rating: (args.rating as number) ?? null,
+      priceLevel: (args.price_level as number) ?? null,
       priority: (args.priority as number) ?? null,
       durationMin: (args.duration_min as number) ?? null,
       kidFriendly: (args.kid_friendly as boolean) ?? null,
@@ -573,11 +644,76 @@ export const toolHandlers: Record<string, ToolHandler> = {
       name: p.name,
       category: p.category,
       address: p.address,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      website_url: p.websiteUrl,
+      maps_url: p.mapsUrl,
+      phone: p.phone,
+      booking_url: p.bookingUrl,
+      ticket_url: p.ticketUrl,
+      reservation_recommended: p.reservationRecommended,
+      rating: p.rating,
+      price_level: p.priceLevel,
       priority: p.priority,
       duration_min: p.durationMin,
       kid_friendly: p.kidFriendly,
       notes: p.notes,
     }));
+  },
+
+  async search_place_details(ctx, args) {
+    const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+    const places = await searchPlaceDetails({
+      query: String(args.query),
+      destination: trip.destination,
+      maxResults: args.max_results !== undefined ? requireInteger(args.max_results, "max_results") : undefined,
+    });
+    return places.map((p) => ({
+      external_provider: p.provider,
+      external_id: p.externalId,
+      name: p.name,
+      category: p.category,
+      address: p.address,
+      latitude: p.latitude,
+      longitude: p.longitude,
+      maps_url: p.mapsUrl,
+      types: p.types,
+    }));
+  },
+
+  async enrich_place(ctx, args) {
+    const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+    const result = await enrichPlace({
+      tripId,
+      placeId: requireInteger(args.place_id, "place_id"),
+      destination: trip.destination,
+      query: (args.query as string) ?? null,
+      externalId: (args.external_id as string) ?? null,
+    });
+    return {
+      ok: result.updated,
+      place_id: result.place?.id ?? null,
+      duplicate_place_id: result.duplicatePlaceId,
+      google_place: result.googlePlace
+        ? {
+            external_id: result.googlePlace.externalId,
+            name: result.googlePlace.name,
+            category: result.googlePlace.category,
+            address: result.googlePlace.address,
+            website_url: result.googlePlace.websiteUrl,
+            maps_url: result.googlePlace.mapsUrl,
+            phone: result.googlePlace.phone,
+            booking_url: result.googlePlace.bookingUrl,
+            ticket_url: result.googlePlace.ticketUrl,
+            reservation_recommended: result.googlePlace.reservationRecommended,
+            advice: result.googlePlace.advice,
+          }
+        : null,
+    };
   },
 
   async update_place(ctx, args) {
@@ -588,6 +724,18 @@ export const toolHandlers: Record<string, ToolHandler> = {
         ? { category: requirePlaceCategory(args.category, "category") }
         : {}),
       ...(args.address !== undefined ? { address: args.address as string } : {}),
+      ...(args.latitude !== undefined ? { latitude: Number(args.latitude) } : {}),
+      ...(args.longitude !== undefined ? { longitude: Number(args.longitude) } : {}),
+      ...(args.website_url !== undefined ? { websiteUrl: args.website_url as string } : {}),
+      ...(args.maps_url !== undefined ? { mapsUrl: args.maps_url as string } : {}),
+      ...(args.phone !== undefined ? { phone: args.phone as string } : {}),
+      ...(args.booking_url !== undefined ? { bookingUrl: args.booking_url as string } : {}),
+      ...(args.ticket_url !== undefined ? { ticketUrl: args.ticket_url as string } : {}),
+      ...(args.reservation_recommended !== undefined
+        ? { reservationRecommended: Boolean(args.reservation_recommended) }
+        : {}),
+      ...(args.rating !== undefined ? { rating: Number(args.rating) } : {}),
+      ...(args.price_level !== undefined ? { priceLevel: requireInteger(args.price_level, "price_level") } : {}),
       ...(args.priority !== undefined ? { priority: requireInteger(args.priority, "priority") } : {}),
       ...(args.duration_min !== undefined
         ? { durationMin: requireInteger(args.duration_min, "duration_min") }
@@ -725,6 +873,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async clear_day(ctx, args) {
+    requireConfirmation(args);
     const tripId = requireTrip(ctx);
     await clearDay(tripId, Number(args.day_number));
     return { ok: true };

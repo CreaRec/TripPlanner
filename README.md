@@ -15,6 +15,7 @@ layer. Vector inserts and similarity search use raw SQL because pgvector columns
 Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
                       |
                       +-->  OpenAI API (chat + embeddings)
+                      +-->  Google Places API (optional place enrichment)
                       +-->  ./data/exports (PDF / CSV)
 ```
 
@@ -23,7 +24,7 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
 - Trips: create, list, select an active trip.
 - Chat: free-text conversation with a tool-calling planning agent.
 - Memory: structured, embedded memories (preferences, constraints, decisions) retrieved via semantic search.
-- Places: save points of interest with category, notes, kid-friendly flag.
+- Places: save points of interest with category, notes, kid-friendly flag, and optional Google Places enrichment.
 - Itinerary: day-by-day plans with ordered items.
 - Export: generate PDF and CSV of an itinerary, delivered as Telegram documents.
 
@@ -35,6 +36,7 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
 - Docker + Docker Compose
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - An OpenAI API key
+- Optional: a Google Maps Platform key with Places API (New) enabled
 
 ## Setup
 
@@ -47,6 +49,10 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
 
    Find your numeric Telegram ID via [@userinfobot](https://t.me/userinfobot) and put it in
    `ALLOWED_TELEGRAM_IDS` (comma-separated for multiple people).
+
+   To enrich saved places with addresses, coordinates, maps links, websites, hours/ratings, and
+   booking or ticket advice, set `GOOGLE_MAPS_API_KEY`. In Google Cloud, restrict the key to
+   Places API (New), use minimal field masks, and set a small budget alert.
 
 2. Start everything locally (boots Postgres in Docker, applies Prisma migrations, starts the bot in watch mode):
 

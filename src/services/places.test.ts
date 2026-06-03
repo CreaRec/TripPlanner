@@ -14,7 +14,7 @@ const { prismaMock } = vi.hoisted(() => ({
 
 vi.mock("../db/prisma", () => ({ prisma: prismaMock }));
 
-import { addPlace, deletePlace, listPlaces, updatePlace } from "./places";
+import { addPlace, deletePlace, findPlaceByExternalId, getPlace, listPlaces, updatePlace } from "./places";
 
 describe("addPlace", () => {
   it("creates a place with defaulted fields", async () => {
@@ -41,6 +41,41 @@ describe("addPlace", () => {
       tripId: 3,
       name: "Bistro",
       category: "restaurant",
+    });
+  });
+
+  it("creates a place with enrichment fields", async () => {
+    prismaMock.place.create.mockResolvedValueOnce({ id: 3, name: "Louvre" });
+    await addPlace({
+      tripId: 3,
+      name: "Louvre",
+      category: "museum",
+      externalProvider: "google_places",
+      externalId: "abc",
+      latitude: 48.8606,
+      longitude: 2.3376,
+      websiteUrl: "https://www.louvre.fr",
+      mapsUrl: "https://maps.google.com/?cid=abc",
+      reservationRecommended: true,
+      ticketUrl: "https://www.louvre.fr",
+      rating: 4.7,
+      priceLevel: 2,
+    });
+    const data = prismaMock.place.create.mock.calls.at(-1)?.[0].data;
+    expect(data).toMatchObject({
+      tripId: 3,
+      name: "Louvre",
+      category: "museum",
+      externalProvider: "google_places",
+      externalId: "abc",
+      latitude: 48.8606,
+      longitude: 2.3376,
+      websiteUrl: "https://www.louvre.fr",
+      mapsUrl: "https://maps.google.com/?cid=abc",
+      reservationRecommended: true,
+      ticketUrl: "https://www.louvre.fr",
+      rating: 4.7,
+      priceLevel: 2,
     });
   });
 });
@@ -81,6 +116,26 @@ describe("updatePlace", () => {
     expect(prismaMock.place.update).toHaveBeenCalledWith({
       where: { id: 9 },
       data: { category: "other" },
+    });
+  });
+});
+
+describe("getPlace", () => {
+  it("reads a place scoped to the trip", async () => {
+    prismaMock.place.findFirst.mockResolvedValueOnce({ id: 9, tripId: 3 });
+    await getPlace(3, 9);
+    expect(prismaMock.place.findFirst).toHaveBeenCalledWith({
+      where: { id: 9, tripId: 3 },
+    });
+  });
+});
+
+describe("findPlaceByExternalId", () => {
+  it("reads a place by external provider and id scoped to the trip", async () => {
+    prismaMock.place.findFirst.mockResolvedValueOnce({ id: 9, tripId: 3 });
+    await findPlaceByExternalId(3, "google_places", "abc");
+    expect(prismaMock.place.findFirst).toHaveBeenCalledWith({
+      where: { tripId: 3, externalProvider: "google_places", externalId: "abc" },
     });
   });
 });

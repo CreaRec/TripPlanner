@@ -27,6 +27,8 @@ const m = vi.hoisted(() => ({
   updateReservation: vi.fn(),
   exportItineraryCsv: vi.fn(),
   exportItineraryPdf: vi.fn(),
+  searchPlaceDetails: vi.fn(),
+  enrichPlace: vi.fn(),
   setActiveTripId: vi.fn(),
 }));
 
@@ -76,6 +78,10 @@ vi.mock("../services/export", () => ({
   exportItineraryCsv: m.exportItineraryCsv,
   exportItineraryPdf: m.exportItineraryPdf,
 }));
+vi.mock("../services/placeEnrichment", () => ({
+  searchPlaceDetails: m.searchPlaceDetails,
+  enrichPlace: m.enrichPlace,
+}));
 vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
 
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
@@ -84,9 +90,15 @@ function ctx(activeTripId: number | null = null): AgentContext {
   return { telegramId: 111, activeTripId, exports: [] };
 }
 
+function toolFunction(name: string) {
+  const tool = toolDefinitions.find((t) => t.type === "function" && t.function.name === name);
+  if (!tool || tool.type !== "function") throw new Error(`Tool ${name} not found.`);
+  return tool.function;
+}
+
 describe("toolDefinitions", () => {
   it("exposes the expected tool names", () => {
-    const names = toolDefinitions.map((t) => t.function.name);
+    const names = toolDefinitions.flatMap((t) => (t.type === "function" ? [t.function.name] : []));
     expect(names).toEqual(
       expect.arrayContaining([
         "create_trip",
@@ -96,6 +108,8 @@ describe("toolDefinitions", () => {
         "delete_trip",
         "add_place",
         "list_places",
+        "search_place_details",
+        "enrich_place",
         "update_place",
         "delete_place",
         "add_reservation",
@@ -127,11 +141,20 @@ describe("toolDefinitions", () => {
       "tour",
       "other",
     ];
-    const addPlace = toolDefinitions.find((t) => t.function.name === "add_place");
-    const updatePlace = toolDefinitions.find((t) => t.function.name === "update_place");
+    const addPlace = toolFunction("add_place");
+    const updatePlace = toolFunction("update_place");
 
-    expect((addPlace?.function.parameters as any).properties.category.enum).toEqual(expectedCategories);
-    expect((updatePlace?.function.parameters as any).properties.category.enum).toEqual(expectedCategories);
+    expect((addPlace.parameters as any).properties.category.enum).toEqual(expectedCategories);
+    expect((updatePlace.parameters as any).properties.category.enum).toEqual(expectedCategories);
+  });
+
+  it("instructs the agent to pass search results into enrich_place for existing places", () => {
+    const searchPlace = toolFunction("search_place_details");
+    const enrichPlace = toolFunction("enrich_place");
+
+    expect(searchPlace.description).toContain("pass the selected external_id to enrich_place");
+    expect(enrichPlace.description).toContain("existing place_id");
+    expect(enrichPlace.description).toContain("external_id");
   });
 });
 
@@ -256,6 +279,108 @@ describe("requireTrip-guarded tools", () => {
     ]);
   });
 
+  it("list_places returns enrichment fields", async () => {
+    m.listPlaces.mockResolvedValueOnce([
+      {
+        id: 5,
+        name: "Louvre",
+        category: "museum",
+        address: "Rue de Rivoli",
+        latitude: 48.8606,
+        longitude: 2.3376,
+        websiteUrl: "https://www.louvre.fr",
+        mapsUrl: "https://maps.google.com/?cid=abc",
+        phone: "01 40 20 50 50",
+        bookingUrl: null,
+        ticketUrl: "https://www.louvre.fr",
+        reservationRecommended: true,
+        rating: 4.7,
+        priceLevel: 2,
+        priority: 1,
+        durationMin: 180,
+        kidFriendly: true,
+        notes: "Book ahead",
+      },
+    ]);
+    const result = await toolHandlers.list_places(ctx(7), {});
+    expect(m.listPlaces).toHaveBeenCalledWith(7);
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 5,
+        website_url: "https://www.louvre.fr",
+        maps_url: "https://maps.google.com/?cid=abc",
+        ticket_url: "https://www.louvre.fr",
+        reservation_recommended: true,
+        rating: 4.7,
+      }),
+    ]);
+  });
+
+  it("search_place_details searches in the active trip destination", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Paris" });
+    m.searchPlaceDetails.mockResolvedValueOnce([
+      {
+        provider: "google_places",
+        externalId: "abc",
+        name: "Louvre Museum",
+        category: "museum",
+        address: "Rue de Rivoli",
+        latitude: 48.8606,
+        longitude: 2.3376,
+        mapsUrl: "https://maps.google.com/?cid=abc",
+        types: ["museum"],
+      },
+    ]);
+    const result = await toolHandlers.search_place_details(ctx(7), { query: "Louvre", max_results: 2 });
+    expect(m.searchPlaceDetails).toHaveBeenCalledWith({
+      query: "Louvre",
+      destination: "Paris",
+      maxResults: 2,
+    });
+    expect(result).toEqual([
+      expect.objectContaining({
+        external_provider: "google_places",
+        external_id: "abc",
+        category: "museum",
+      }),
+    ]);
+  });
+
+  it("enrich_place enriches an existing saved place", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Paris" });
+    m.enrichPlace.mockResolvedValueOnce({
+      updated: true,
+      duplicatePlaceId: null,
+      place: { id: 5 },
+      googlePlace: {
+        externalId: "abc",
+        name: "Louvre Museum",
+        category: "museum",
+        address: "Rue de Rivoli",
+        websiteUrl: "https://www.louvre.fr",
+        mapsUrl: "https://maps.google.com/?cid=abc",
+        phone: "01 40 20 50 50",
+        bookingUrl: null,
+        ticketUrl: "https://www.louvre.fr",
+        reservationRecommended: true,
+        advice: "Check tickets.",
+      },
+    });
+    const result = await toolHandlers.enrich_place(ctx(7), { place_id: 5, external_id: "abc" });
+    expect(m.enrichPlace).toHaveBeenCalledWith({
+      tripId: 7,
+      placeId: 5,
+      destination: "Paris",
+      query: null,
+      externalId: "abc",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      place_id: 5,
+      google_place: { ticket_url: "https://www.louvre.fr", reservation_recommended: true },
+    });
+  });
+
   it("update_reservation updates a booking in the active trip", async () => {
     m.updateReservation.mockResolvedValueOnce({ id: 9, title: "Updated" });
     const result = await toolHandlers.update_reservation(ctx(7), {
@@ -323,6 +448,16 @@ describe("requireTrip-guarded tools", () => {
 
   it("delete_itinerary_item requires explicit confirmation", async () => {
     await expect(toolHandlers.delete_itinerary_item(ctx(7), { item_id: 22 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("clear_day requires explicit confirmation", async () => {
+    await expect(toolHandlers.clear_day(ctx(7), { day_number: 2 })).rejects.toThrow(/confirmation/);
+  });
+
+  it("clear_day clears a confirmed day in the active trip", async () => {
+    const result = await toolHandlers.clear_day(ctx(7), { day_number: 2, confirmed: true });
+    expect(m.clearDay).toHaveBeenCalledWith(7, 2);
+    expect(result).toEqual({ ok: true });
   });
 
   it("delete_day deletes a confirmed day in the active trip", async () => {
