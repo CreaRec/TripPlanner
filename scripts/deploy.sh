@@ -8,7 +8,10 @@
 # Runs the full test suite locally before syncing; deploy aborts if tests fail.
 #
 # Override any of these via environment variables:
-#   SERVER_HOST, SSH_USER, REMOTE_APP_DIR, SERVICE_NAME, SKIP_NGINX_WEB
+#   SERVER_HOST, SSH_USER, REMOTE_APP_DIR, SERVICE_NAME, SKIP_NGINX_WEB, DEPLOY_PASSWORD
+#
+# Optional DEPLOY_PASSWORD in local .env (or env) supplies SSH/sudo passwords via sshpass.
+# When unset, SSH and sudo prompt interactively as before.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,6 +28,28 @@ SKIP_NGINX_WEB="${SKIP_NGINX_WEB:-}"
 
 SSH_TARGET="${SSH_USER}@${SERVER_HOST}"
 SSH_CONTROL_PATH="${SSH_CONTROL_PATH:-${TMPDIR:-/tmp}/trip-deploy-${SSH_USER}-${SERVER_HOST}}"
+
+if [ -z "${DEPLOY_PASSWORD:-}" ]; then
+  DEPLOY_PASSWORD="$(read_env_var DEPLOY_PASSWORD)"
+fi
+
+USE_SSHPASS=false
+if [ -n "${DEPLOY_PASSWORD:-}" ]; then
+  if ! command -v sshpass >/dev/null 2>&1; then
+    err "DEPLOY_PASSWORD is set but sshpass is not installed (e.g. brew install hudochenkov/sshpass/sshpass)."
+    exit 1
+  fi
+  export SSHPASS="$DEPLOY_PASSWORD"
+  USE_SSHPASS=true
+fi
+
+ssh_wrap() {
+  if [ "$USE_SSHPASS" = true ]; then
+    sshpass -e ssh "$@"
+  else
+    ssh "$@"
+  fi
+}
 
 log "Deploying to ${SSH_TARGET}:${REMOTE_APP_DIR} (service: ${SERVICE_NAME})"
 
@@ -43,22 +68,29 @@ ok "All tests passed."
 
 # 3. One SSH login for the whole deploy (rsync + remote commands reuse this socket).
 close_ssh_master() {
-  ssh -S "$SSH_CONTROL_PATH" -O exit "$SSH_TARGET" 2>/dev/null || true
+  ssh_wrap -S "$SSH_CONTROL_PATH" -O exit "$SSH_TARGET" 2>/dev/null || true
 }
 
 open_ssh_master() {
-  if ssh -S "$SSH_CONTROL_PATH" -O check "$SSH_TARGET" 2>/dev/null; then
+  if ssh_wrap -S "$SSH_CONTROL_PATH" -O check "$SSH_TARGET" 2>/dev/null; then
     return 0
   fi
-  log "Opening SSH connection (enter server password once)..."
-  ssh -M -S "$SSH_CONTROL_PATH" -fnNT "$SSH_TARGET"
+  if [ "$USE_SSHPASS" = true ]; then
+    log "Opening SSH connection..."
+  else
+    log "Opening SSH connection (enter server password once)..."
+  fi
+  ssh_wrap -M -S "$SSH_CONTROL_PATH" -fnNT "$SSH_TARGET"
 }
 
 open_ssh_master
 trap close_ssh_master EXIT
 
-ssh_cmd() { ssh -S "$SSH_CONTROL_PATH" "$@"; }
+ssh_cmd() { ssh_wrap -S "$SSH_CONTROL_PATH" "$@"; }
 RSYNC_RSH="ssh -S ${SSH_CONTROL_PATH}"
+if [ "$USE_SSHPASS" = true ]; then
+  RSYNC_RSH="sshpass -e ssh -S ${SSH_CONTROL_PATH}"
+fi
 
 # 4. Ensure the remote app directory exists.
 ssh_cmd "$SSH_TARGET" "mkdir -p '${REMOTE_APP_DIR}'"
@@ -86,7 +118,16 @@ fi
 #    Do not pipe the remote script on stdin — that prevents ssh -t from allocating a TTY.
 log "Running remote build & service setup..."
 REMOTE_SCRIPT="${REMOTE_APP_DIR}/scripts/deploy-remote.sh"
+REMOTE_ENV=(
+  "REMOTE_APP_DIR=$(printf '%q' "$REMOTE_APP_DIR")"
+  "SERVICE_NAME=$(printf '%q' "$SERVICE_NAME")"
+  "DEPLOY_USER=$(printf '%q' "$SSH_USER")"
+  "SKIP_NGINX_WEB=$(printf '%q' "$SKIP_NGINX_WEB")"
+)
+if [ -n "${DEPLOY_PASSWORD:-}" ]; then
+  REMOTE_ENV+=("DEPLOY_PASSWORD=$(printf '%q' "$DEPLOY_PASSWORD")")
+fi
 ssh_cmd -tt "$SSH_TARGET" \
-  "REMOTE_APP_DIR='${REMOTE_APP_DIR}' SERVICE_NAME='${SERVICE_NAME}' DEPLOY_USER='${SSH_USER}' SKIP_NGINX_WEB='${SKIP_NGINX_WEB}' bash '${REMOTE_SCRIPT}'"
+  "${REMOTE_ENV[*]} bash $(printf '%q' "$REMOTE_SCRIPT")"
 
 ok "Deploy complete."

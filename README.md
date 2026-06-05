@@ -135,9 +135,14 @@ SERVER_HOST=192.168.1.135 SSH_USER=crearec ./scripts/deploy.sh
 
 Override any of: `SERVER_HOST`, `SSH_USER`, `REMOTE_APP_DIR`, `SERVICE_NAME`.
 
+Set optional `DEPLOY_PASSWORD` in local `.env` (or export it) to skip SSH/sudo prompts during
+deploy; you need `sshpass` installed locally. When `DEPLOY_PASSWORD` is unset, deploy asks for
+passwords interactively.
+
 The deploy script reuses one SSH connection and one `sudo` session on the server, so you should
 only be prompted for the server login password once and the sudo password once (if password auth
-is used). For zero prompts, use SSH keys and passwordless sudo for the deploy user.
+is used). For zero prompts, use SSH keys and passwordless sudo for the deploy user, or
+`DEPLOY_PASSWORD` with `sshpass`.
 
 Make sure `.env` exists in `REMOTE_APP_DIR` on the server (the deploy script never overwrites it).
 
