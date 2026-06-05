@@ -1,6 +1,8 @@
-import { config } from "./config";
+import type { Server } from "node:http";
+import { config, isGmailOAuthConfigured } from "./config";
 import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
+import { createHttpServer } from "./http/server";
 
 async function main(): Promise<void> {
   console.log("[startup] verifying database connection...");
@@ -13,11 +15,26 @@ async function main(): Promise<void> {
     );
   }
 
+  let httpServer: Server | null = null;
+  if (isGmailOAuthConfigured()) {
+    httpServer = createHttpServer();
+    await new Promise<void>((resolve, reject) => {
+      httpServer!.listen(config.httpPort, () => resolve());
+      httpServer!.once("error", reject);
+    });
+    console.log(`[startup] OAuth HTTP server listening on port ${config.httpPort}.`);
+  } else {
+    console.log("[startup] Gmail OAuth not configured — Gmail connect disabled.");
+  }
+
   const bot = createBot();
 
   const shutdown = async (signal: string) => {
     console.log(`[shutdown] received ${signal}, stopping...`);
     bot.stop(signal);
+    if (httpServer) {
+      await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
+    }
     await disconnect();
     process.exit(0);
   };

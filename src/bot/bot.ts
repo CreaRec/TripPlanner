@@ -1,9 +1,15 @@
 import { Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
-import { config } from "../config";
+import { config, isGmailOAuthConfigured } from "../config";
 import { runAgent } from "../agent/runAgent";
 import { extractTravelInfoFromImage } from "../agent/vision";
 import { ensureUser } from "../services/users";
+import { startConnectFlow } from "../http/server";
+import {
+  isConnectGmailRequest,
+  parseExportGmailByNumberRequest,
+} from "../services/gmailIntents";
+import { exportGmailBySearchIndex } from "../services/gmailSearchSession";
 
 async function sendAgentResult(
   ctx: {
@@ -13,16 +19,75 @@ async function sendAgentResult(
   },
   result: Awaited<ReturnType<typeof runAgent>>,
 ): Promise<void> {
-  if (result.reply) {
-    await ctx.reply(result.reply);
-  }
+  let failedFiles = 0;
+
   for (const file of result.files) {
-    if (file.toLowerCase().endsWith(".png")) {
-      await ctx.replyWithPhoto({ source: file });
-    } else {
-      await ctx.replyWithDocument({ source: file });
+    try {
+      if (file.toLowerCase().endsWith(".png")) {
+        await ctx.replyWithPhoto({ source: file });
+      } else {
+        await ctx.replyWithDocument({ source: file });
+      }
+    } catch (err) {
+      failedFiles += 1;
+      console.error("[bot] failed to send file:", file, err);
     }
   }
+
+  let reply = result.reply;
+  if (failedFiles > 0) {
+    const suffix =
+      failedFiles === result.files.length
+        ? "\n\nНе удалось прикрепить файл. Попробуйте ещё раз."
+        : "\n\nНе удалось прикрепить часть файлов.";
+    reply = reply ? `${reply}${suffix}` : suffix.trim();
+  }
+
+  if (reply) {
+    await ctx.reply(reply);
+  }
+}
+
+async function replyDirectGmailExport(
+  ctx: {
+    from: { id: number };
+    reply: (text: string) => Promise<unknown>;
+    replyWithDocument: (doc: { source: string }) => Promise<unknown>;
+  },
+  index: number,
+): Promise<void> {
+  const result = await exportGmailBySearchIndex(ctx.from.id, index);
+  if (!result.ok) {
+    if (result.reason === "no_session") {
+      await ctx.reply("Сначала найдите письма — например: «найди письма про отель».");
+      return;
+    }
+    if (result.reason === "invalid_index") {
+      await ctx.reply(
+        `В последнем поиске только ${result.count} ${result.count === 1 ? "письмо" : "писем"}. Укажите номер от 1 до ${result.count}.`,
+      );
+      return;
+    }
+    if (result.reason === "account_unavailable") {
+      await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
+      return;
+    }
+    console.error("[bot] direct gmail export failed:", result.message);
+    await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+    return;
+  }
+
+  try {
+    await ctx.replyWithDocument({ source: result.filePath });
+  } catch (err) {
+    console.error("[bot] failed to send exported gmail file:", result.filePath, err);
+    await ctx.reply("Не удалось прикрепить файл. Попробуйте ещё раз.");
+    return;
+  }
+
+  await ctx.reply(
+    `Готово — .eml файл письма ${result.index} прикреплён. Можно открыть его в Mail, Outlook или Thunderbird.`,
+  );
 }
 
 async function downloadTelegramFile(ctx: {
@@ -49,7 +114,20 @@ function imagePromptFromExtraction(extracted: string, caption?: string): string 
 }
 
 export function createBot(): Telegraf {
-  const bot = new Telegraf(config.telegramBotToken);
+  const bot = new Telegraf(config.telegramBotToken, {
+    handlerTimeout: config.botHandlerTimeoutMs,
+  });
+
+  bot.catch((err, ctx) => {
+    console.error("[bot] unhandled error:", err);
+    const message =
+      err instanceof Error && err.name === "TimeoutError"
+        ? "Запрос занял слишком много времени. Попробуйте ещё раз."
+        : "Something went wrong. Please try again.";
+    void ctx.reply(message).catch((replyErr) => {
+      console.error("[bot] failed to send error reply:", replyErr);
+    });
+  });
 
   // Whitelist middleware: only allowed Telegram IDs may use the bot.
   bot.use(async (ctx, next) => {
@@ -71,6 +149,8 @@ export function createBot(): Telegraf {
         "Hi! I'm your trip planner.",
         "",
         "Just write what you want in plain language: plan a trip, show your trips, switch to another trip, export the itinerary, or leave the current trip.",
+        "",
+        'Gmail: say "connect gmail" or "подключить почту" to link an inbox, then ask me to find trip or booking emails.',
       ].join("\n"),
     );
   });
@@ -85,9 +165,36 @@ export function createBot(): Telegraf {
         "Switch to the Paris trip",
         "Export the active itinerary as PDF",
         "Leave the current trip",
+        "Find emails about my hotel booking",
+        "",
+        "Gmail examples:",
+        'Connect gmail / "подключить почту"',
+        "Which inboxes are connected?",
+        "Disconnect work@gmail.com",
       ].join("\n"),
     );
   });
+
+  async function replyConnectGmail(ctx: { from: { id: number }; reply: (text: string) => Promise<unknown> }): Promise<void> {
+    if (!isGmailOAuthConfigured()) {
+      await ctx.reply("Gmail OAuth is not configured on this server yet.");
+      return;
+    }
+    try {
+      const url = await startConnectFlow(ctx.from.id);
+      await ctx.reply(
+        [
+          "Open this link to connect Gmail (valid ~10 minutes):",
+          url,
+          "",
+          'Say "connect gmail" or "подключить почту" again to add another inbox.',
+        ].join("\n"),
+      );
+    } catch (err) {
+      console.error("[bot] connect gmail error:", err);
+      await ctx.reply("Could not start Gmail connection. Please try again.");
+    }
+  }
 
   bot.on(message("photo"), async (ctx) => {
     await ctx.sendChatAction("typing");
@@ -147,13 +254,35 @@ export function createBot(): Telegraf {
     const text = ctx.message.text;
     if (text.startsWith("/")) return; // unknown command; ignore
 
+    if (isConnectGmailRequest(text)) {
+      await replyConnectGmail(ctx);
+      return;
+    }
+
+    const exportIndex = parseExportGmailByNumberRequest(text);
+    if (exportIndex !== null) {
+      await ctx.sendChatAction("upload_document");
+      try {
+        await replyDirectGmailExport(ctx, exportIndex);
+      } catch (err) {
+        console.error("[bot] direct gmail export error:", err);
+        await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+      }
+      return;
+    }
+
     await ctx.sendChatAction("typing");
+    const typingTimer = setInterval(() => {
+      void ctx.sendChatAction("typing");
+    }, 4000);
     try {
       const result = await runAgent(ctx.from.id, text);
       await sendAgentResult(ctx, result);
     } catch (err) {
       console.error("[bot] agent error:", err);
       await ctx.reply("Something went wrong while planning. Please try again.");
+    } finally {
+      clearInterval(typingTimer);
     }
   });
 

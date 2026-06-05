@@ -22,6 +22,7 @@ Replace `<your-domain>` with the hostname that terminates HTTPS for your app (sa
 
    ```nginx
    include /etc/nginx/snippets/crea-trip-planner-static.conf;
+   include /etc/nginx/snippets/crea-trip-planner-oauth.conf;
    ```
 
 4. Test and reload:
@@ -40,6 +41,7 @@ The snippet only defines `location /trip-planner/`; it does not set `listen` or 
 
 - Verifies `web/trip-planner/index.html`, `privacy/index.html`, and `terms/index.html` exist on the server
 - Installs `/etc/nginx/snippets/crea-trip-planner-static.conf` with `REMOTE_APP_DIR` substituted for `__APP_DIR__`
+- Installs `/etc/nginx/snippets/crea-trip-planner-oauth.conf` with `HTTP_PORT` read from the server `.env` (default `3000`)
 - Runs `nginx -t` and reloads nginx when nginx is available (warnings only on failure; the bot deploy still completes)
 
 Environment variables:

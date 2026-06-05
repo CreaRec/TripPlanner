@@ -21,7 +21,8 @@ const { FakeTelegraf } = vi.hoisted(() => {
       commands: Record<string, (ctx: unknown) => unknown>;
       on: Array<{ filter: unknown; fn: (ctx: unknown) => unknown }>;
     } = { use: [], commands: {}, on: [] };
-    constructor(public token: string) {}
+    constructor(public token: string, public options?: unknown) {}
+    catch(_fn: unknown) {}
     use(fn: (ctx: unknown, next: () => unknown) => unknown) {
       this.handlers.use.push(fn);
     }
@@ -59,8 +60,21 @@ vi.mock("../services/export", () => ({
 }));
 vi.mock("../agent/runAgent", () => ({ runAgent: f.runAgent }));
 vi.mock("../agent/vision", () => ({ extractTravelInfoFromImage: f.extractTravelInfoFromImage }));
+vi.mock("../http/server", () => ({ startConnectFlow: vi.fn().mockResolvedValue("https://example.com/oauth/start") }));
+vi.mock("../services/gmailSearchSession", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/gmailSearchSession")>();
+  return {
+    ...actual,
+    exportGmailBySearchIndex: vi.fn(),
+  };
+});
+vi.mock("../config", () => ({
+  config: { allowedTelegramIds: [111] },
+  isGmailOAuthConfigured: vi.fn().mockReturnValue(true),
+}));
 
 import { createBot } from "./bot";
+import { exportGmailBySearchIndex } from "../services/gmailSearchSession";
 
 interface FakeTelegrafHandlers {
   use: Array<(ctx: unknown, next: () => unknown) => unknown>;
@@ -124,8 +138,8 @@ describe("whitelist middleware", () => {
 });
 
 describe("plain-language help", () => {
-  it("does not register trip-management slash commands", () => {
-    expect(bot().commands).toEqual({});
+  it("does not register gmail slash commands", () => {
+    expect(Object.keys(bot().commands)).toEqual([]);
   });
 
   it("describes text-based actions in /help", async () => {
@@ -135,6 +149,9 @@ describe("plain-language help", () => {
     expect(text).toContain("plain language");
     expect(text).toContain("Show my trips");
     expect(text).toContain("Leave the current trip");
+    expect(text).toContain("Connect gmail");
+    expect(text).toContain("Which inboxes are connected?");
+    expect(text).not.toContain("/connect_gmail");
     expect(text).not.toContain("/trips");
     expect(text).not.toContain("/use");
     expect(text).not.toContain("/export");
@@ -142,13 +159,16 @@ describe("plain-language help", () => {
 });
 
 describe("text handler", () => {
-  it("routes free text to the agent and returns the reply plus files", async () => {
+  it("routes free text to the agent and sends files before the reply", async () => {
     f.runAgent.mockResolvedValueOnce({ reply: "Here is your plan", files: ["/tmp/p.pdf"] });
     const ctx = fakeCtx({ message: { text: "plan my trip" } });
     await handler("text")(ctx);
     expect(f.runAgent).toHaveBeenCalledWith(111, "plan my trip");
-    expect(ctx.reply).toHaveBeenCalledWith("Here is your plan");
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/p.pdf" });
+    expect(ctx.reply).toHaveBeenCalledWith("Here is your plan");
+    expect(ctx.replyWithDocument.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.reply.mock.invocationCallOrder[0],
+    );
   });
 
   it("sends generated PNG files as photos", async () => {
@@ -162,6 +182,53 @@ describe("text handler", () => {
   it("ignores unknown slash commands", async () => {
     const ctx = fakeCtx({ message: { text: "/unknown" } });
     await handler("text")(ctx);
+    expect(f.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("starts gmail connect flow for natural-language connect requests", async () => {
+    const { startConnectFlow } = await import("../http/server");
+    vi.mocked(startConnectFlow).mockResolvedValueOnce(
+      "https://example.com/trip-planner/oauth/google/start?state=abc",
+    );
+    const ctx = fakeCtx({ message: { text: "Подключить почту" } });
+    await handler("text")(ctx);
+    expect(startConnectFlow).toHaveBeenCalledWith(111);
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("trip-planner/oauth/google/start"));
+    expect(f.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("starts gmail connect flow for add-account phrases and bare Gmail addresses", async () => {
+    const { startConnectFlow } = await import("../http/server");
+    vi.mocked(startConnectFlow).mockResolvedValue(
+      "https://example.com/trip-planner/oauth/google/start?state=abc",
+    );
+
+    const addAccountCtx = fakeCtx({ message: { text: "Добавь аккаунт" } });
+    await handler("text")(addAccountCtx);
+    expect(startConnectFlow).toHaveBeenCalledWith(111);
+    expect(addAccountCtx.reply).toHaveBeenCalledWith(expect.stringContaining("trip-planner/oauth/google/start"));
+    expect(f.runAgent).not.toHaveBeenCalled();
+
+    f.runAgent.mockClear();
+    const emailCtx = fakeCtx({ message: { text: "creativerap@gmail.com" } });
+    await handler("text")(emailCtx);
+    expect(startConnectFlow).toHaveBeenCalledWith(111);
+    expect(emailCtx.reply).toHaveBeenCalledWith(expect.stringContaining("trip-planner/oauth/google/start"));
+    expect(f.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("exports gmail by number without calling the agent", async () => {
+    vi.mocked(exportGmailBySearchIndex).mockResolvedValueOnce({
+      ok: true,
+      filePath: "/tmp/hotel-b-msg2.eml",
+      subject: "Hotel B",
+      index: 2,
+    });
+    const ctx = fakeCtx({ message: { text: "Дай письмо 2" } });
+    await handler("text")(ctx);
+    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 2);
+    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-msg2.eml" });
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("письма 2"));
     expect(f.runAgent).not.toHaveBeenCalled();
   });
 });

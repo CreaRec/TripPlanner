@@ -47,4 +47,16 @@ describe("config", () => {
     vi.stubEnv("ALLOWED_TELEGRAM_IDS", "111,abc");
     await expect(import("./config")).rejects.toThrow(/non-numeric/);
   });
+
+  it("detects configured Gmail OAuth", async () => {
+    vi.stubEnv("GOOGLE_OAUTH_CLIENT_ID", "client-id");
+    vi.stubEnv("GOOGLE_OAUTH_CLIENT_SECRET", "secret");
+    vi.stubEnv("GOOGLE_OAUTH_REDIRECT_URI", "https://example.com/trip-planner/oauth/google/callback");
+    vi.stubEnv("OAUTH_TOKEN_ENCRYPTION_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    vi.stubEnv("PUBLIC_APP_URL", "https://example.com");
+    vi.stubEnv("HTTP_PORT", "3001");
+    const { config, isGmailOAuthConfigured } = await import("./config");
+    expect(config.httpPort).toBe(3001);
+    expect(isGmailOAuthConfigured()).toBe(true);
+  });
 });

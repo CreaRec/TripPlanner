@@ -24,6 +24,27 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("Do not fetch weather proactively");
   });
 
+  it("uses search_gmail for email lookup requests across all inboxes", () => {
+    expect(SYSTEM_PROMPT).toContain("search_gmail");
+    expect(SYSTEM_PROMPT).toContain("export_gmail_message");
+    expect(SYSTEM_PROMPT).toContain("do not search again");
+    expect(SYSTEM_PROMPT).toContain("Always search all connected accounts");
+    expect(SYSTEM_PROMPT).toContain("Do not include Gmail links");
+    expect(SYSTEM_PROMPT).toContain("подключить почту");
+    expect(SYSTEM_PROMPT).toContain("connect gmail");
+    expect(SYSTEM_PROMPT).not.toContain("/connect_gmail");
+    expect(SYSTEM_PROMPT).not.toContain("gmail_search_urls");
+  });
+
+  it("uses gmail account tools for connect, list, and disconnect requests", () => {
+    expect(SYSTEM_PROMPT).toContain("start_gmail_connect");
+    expect(SYSTEM_PROMPT).toContain("connect_url");
+    expect(SYSTEM_PROMPT).toContain("добавь аккаунт");
+    expect(SYSTEM_PROMPT).toContain("list_gmail_accounts");
+    expect(SYSTEM_PROMPT).toContain("disconnect_gmail_account");
+    expect(SYSTEM_PROMPT).toContain("disconnecting a Gmail inbox");
+  });
+
   it("does not claim a map is attached unless generation succeeded", () => {
     expect(SYSTEM_PROMPT).toContain("Only say a comparison map is attached");
     expect(SYSTEM_PROMPT).toContain("comparison_map_generated=true");

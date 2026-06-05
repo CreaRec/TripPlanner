@@ -10,6 +10,19 @@ set -euo pipefail
 
 cd "$REMOTE_APP_DIR"
 
+# Reuse one sudo authentication for nginx/systemd steps (avoids repeated password prompts).
+if ! sudo -n true 2>/dev/null; then
+  echo "[remote] sudo required for nginx/systemd setup (enter password once)..."
+  sudo -v
+  while true; do
+    sudo -n true || exit
+    sleep 50
+    kill -0 "$$" || exit
+  done 2>/dev/null &
+  SUDO_KEEPALIVE_PID=$!
+  trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
+fi
+
 echo "[remote] verifying static web pages..."
 for f in web/trip-planner/index.html web/trip-planner/privacy/index.html web/trip-planner/terms/index.html; do
   if [ ! -f "$f" ]; then
@@ -28,11 +41,31 @@ else
   sudo cp "$TMP_SNIPPET" /etc/nginx/snippets/crea-trip-planner-static.conf
   rm -f "$TMP_SNIPPET"
 
+  echo "[remote] installing nginx snippet for /trip-planner/oauth/ (HTTP_PORT from .env)..."
+  HTTP_PORT="3000"
+  if [ -f "${REMOTE_APP_DIR}/.env" ]; then
+    ENV_PORT="$(grep -E '^HTTP_PORT=' "${REMOTE_APP_DIR}/.env" | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
+    if [ -n "${ENV_PORT}" ]; then
+      HTTP_PORT="${ENV_PORT}"
+    fi
+  fi
+  TMP_OAUTH="$(mktemp)"
+  sed -e "s#__HTTP_PORT__#${HTTP_PORT}#g" deploy/nginx/trip-planner-oauth.conf > "$TMP_OAUTH"
+  sudo cp "$TMP_OAUTH" /etc/nginx/snippets/crea-trip-planner-oauth.conf
+  rm -f "$TMP_OAUTH"
+  echo "[remote] OAuth proxy targets 127.0.0.1:${HTTP_PORT} — ensure HTTPS server block includes:"
+  echo "[remote]   include /etc/nginx/snippets/crea-trip-planner-oauth.conf;"
+
   NGINX_BIN=""
   if command -v nginx >/dev/null 2>&1; then
     NGINX_BIN="$(command -v nginx)"
   elif [ -x /usr/sbin/nginx ]; then
     NGINX_BIN="/usr/sbin/nginx"
+  fi
+
+  if ! grep -rq "crea-trip-planner-oauth.conf" /etc/nginx 2>/dev/null; then
+    echo "[remote] WARN: crea-trip-planner-oauth.conf is NOT included in any nginx config."
+    echo "[remote] WARN: /trip-planner/oauth/* will 404 until you add the include and reload nginx."
   fi
 
   if [ -n "$NGINX_BIN" ]; then

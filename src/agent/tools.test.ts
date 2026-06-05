@@ -39,6 +39,17 @@ const m = vi.hoisted(() => ({
   getWeather: vi.fn(),
   isWeatherConfigured: vi.fn(),
   setActiveTripId: vi.fn(),
+  listAccounts: vi.fn(),
+  getAccountByEmail: vi.fn(),
+  getAccountById: vi.fn(),
+  disconnectAccount: vi.fn(),
+  buildGmailSearchQuery: vi.fn(),
+  searchGmailAccounts: vi.fn(),
+  saveGmailSearchSession: vi.fn(),
+  exportGmailMessageToEml: vi.fn(),
+  getPlace: vi.fn(),
+  isGmailOAuthConfigured: vi.fn(),
+  startConnectFlow: vi.fn(),
 }));
 
 vi.mock("../services/trips", () => ({
@@ -61,6 +72,7 @@ vi.mock("../services/places", () => ({
   deletePlace: m.deletePlace,
   listPlaces: m.listPlaces,
   updatePlace: m.updatePlace,
+  getPlace: m.getPlace,
 }));
 vi.mock("../services/itinerary", () => ({
   addItem: m.addItem,
@@ -110,6 +122,18 @@ vi.mock("../services/weather", () => ({
   isWeatherConfigured: m.isWeatherConfigured,
 }));
 vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
+vi.mock("../services/gmailAccounts", () => ({
+  listAccounts: m.listAccounts,
+  getAccountByEmail: m.getAccountByEmail,
+  getAccountById: m.getAccountById,
+  disconnectAccount: m.disconnectAccount,
+}));
+vi.mock("../services/gmailSearchQuery", () => ({ buildGmailSearchQuery: m.buildGmailSearchQuery }));
+vi.mock("../services/gmailSearch", () => ({ searchGmailAccounts: m.searchGmailAccounts }));
+vi.mock("../services/gmailSearchSession", () => ({ saveGmailSearchSession: m.saveGmailSearchSession }));
+vi.mock("../services/gmailExport", () => ({ exportGmailMessageToEml: m.exportGmailMessageToEml }));
+vi.mock("../config", () => ({ isGmailOAuthConfigured: m.isGmailOAuthConfigured }));
+vi.mock("../http/server", () => ({ startConnectFlow: m.startConnectFlow }));
 
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
 
@@ -187,6 +211,7 @@ describe("toolDefinitions", () => {
         "replace_memory",
         "delete_memory",
         "export_itinerary",
+        "search_gmail",
         "get_weather",
       ]),
     );
@@ -1178,5 +1203,199 @@ describe("save_memory", () => {
     const result = await toolHandlers.delete_memory(ctx(7), { memory_id: 1, confirmed: true });
     expect(m.deleteMemory).toHaveBeenCalledWith(111, 1, 7);
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe("start_gmail_connect", () => {
+  it("returns an oauth start link when configured", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.startConnectFlow.mockResolvedValueOnce(
+      "https://example.com/trip-planner/oauth/google/start?state=abc",
+    );
+
+    const result = await toolHandlers.start_gmail_connect(ctx(7));
+
+    expect(m.startConnectFlow).toHaveBeenCalledWith(111);
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        connect_url: "https://example.com/trip-planner/oauth/google/start?state=abc",
+      }),
+    );
+  });
+
+  it("reports when oauth is not configured", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(false);
+
+    const result = await toolHandlers.start_gmail_connect(ctx(7));
+
+    expect(m.startConnectFlow).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        error: "gmail_oauth_not_configured",
+      }),
+    );
+  });
+});
+
+describe("list_gmail_accounts", () => {
+  it("returns connected accounts", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.listAccounts.mockResolvedValueOnce([
+      {
+        id: 1,
+        googleEmail: "personal@gmail.com",
+        status: "active",
+        connectedAt: new Date("2026-06-01T00:00:00Z"),
+      },
+    ]);
+
+    const result = await toolHandlers.list_gmail_accounts(ctx(7));
+
+    expect(result).toMatchObject({
+      ok: true,
+      accounts: [
+        {
+          gmail_account_id: 1,
+          google_email: "personal@gmail.com",
+          status: "active",
+          connected_at: "2026-06-01T00:00:00.000Z",
+        },
+      ],
+    });
+  });
+});
+
+describe("disconnect_gmail_account", () => {
+  it("requires explicit confirmation", async () => {
+    await expect(
+      toolHandlers.disconnect_gmail_account(ctx(7), { google_email: "work@gmail.com" }),
+    ).rejects.toThrow(/confirmation/);
+  });
+
+  it("disconnects a confirmed account by email", async () => {
+    m.getAccountByEmail.mockResolvedValueOnce({
+      id: 2,
+      googleEmail: "work@gmail.com",
+      status: "active",
+    });
+    m.disconnectAccount.mockResolvedValueOnce(true);
+
+    const result = await toolHandlers.disconnect_gmail_account(ctx(7), {
+      google_email: "work@gmail.com",
+      confirmed: true,
+    });
+
+    expect(m.disconnectAccount).toHaveBeenCalledWith(111, { googleEmail: "work@gmail.com" });
+    expect(result).toEqual({ ok: true, google_email: "work@gmail.com" });
+  });
+});
+
+describe("search_gmail", () => {
+  it("returns not connected when there are no active accounts", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.listAccounts.mockResolvedValueOnce([]);
+    const result = await toolHandlers.search_gmail(ctx(7), {});
+    expect(result).toMatchObject({
+      ok: false,
+      error: "gmail_not_connected",
+      connect_hint: 'Say "подключить почту" or "connect gmail" in Telegram.',
+    });
+  });
+
+  it("searches all connected accounts by default", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.listAccounts.mockResolvedValueOnce([
+      { id: 1, googleEmail: "personal@gmail.com", status: "active" },
+      { id: 2, googleEmail: "work@gmail.com", status: "active" },
+    ]);
+    m.getTrip.mockResolvedValueOnce({
+      id: 7,
+      title: "Paris",
+      destination: "Paris",
+      startDate: new Date("2026-06-01"),
+      endDate: new Date("2026-06-10"),
+    });
+    m.buildGmailSearchQuery.mockReturnValueOnce("after:2026/06/01 Paris");
+    m.searchGmailAccounts.mockResolvedValueOnce({
+      accounts_searched: ["personal@gmail.com", "work@gmail.com"],
+      query_used: "after:2026/06/01 Paris",
+      messages: [],
+    });
+
+    const result = await toolHandlers.search_gmail(ctx(7), {});
+
+    expect(m.searchGmailAccounts).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ googleEmail: "personal@gmail.com" }),
+        expect.objectContaining({ googleEmail: "work@gmail.com" }),
+      ]),
+      expect.objectContaining({ q: "after:2026/06/01 Paris", maxResults: 10 }),
+    );
+    expect(result).toMatchObject({ ok: true, query_used: "after:2026/06/01 Paris" });
+    expect(m.saveGmailSearchSession).toHaveBeenCalled();
+  });
+
+  it("filters to a specific google_email", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.listAccounts.mockResolvedValueOnce([
+      { id: 1, googleEmail: "personal@gmail.com", status: "active" },
+    ]);
+    m.getAccountByEmail.mockResolvedValueOnce({
+      id: 2,
+      googleEmail: "work@gmail.com",
+      status: "active",
+    });
+    m.buildGmailSearchQuery.mockReturnValueOnce("hotel");
+    m.searchGmailAccounts.mockResolvedValueOnce({
+      accounts_searched: ["work@gmail.com"],
+      query_used: "hotel",
+      messages: [],
+    });
+
+    await toolHandlers.search_gmail(ctx(7), { google_email: "work@gmail.com", query: "hotel" });
+
+    expect(m.getAccountByEmail).toHaveBeenCalledWith(111, "work@gmail.com");
+    expect(m.searchGmailAccounts).toHaveBeenCalledWith(
+      [expect.objectContaining({ googleEmail: "work@gmail.com" })],
+      expect.any(Object),
+    );
+  });
+});
+
+describe("export_gmail_message", () => {
+  it("exports the message and attaches the eml file", async () => {
+    m.isGmailOAuthConfigured.mockReturnValue(true);
+    m.getAccountById.mockResolvedValueOnce({
+      id: 2,
+      googleEmail: "work@gmail.com",
+      status: "active",
+    });
+    m.exportGmailMessageToEml.mockResolvedValueOnce({
+      filePath: "/tmp/hotel-booking-msg1.eml",
+      subject: "Hotel booking",
+      from: "hotel@example.com",
+      date: "Mon, 2 Jun 2026 10:00:00 +0000",
+    });
+
+    const c = ctx(7);
+    const result = await toolHandlers.export_gmail_message(c, {
+      gmail_account_id: 2,
+      message_id: "msg-1",
+    });
+
+    expect(m.exportGmailMessageToEml).toHaveBeenCalledWith(
+      expect.objectContaining({ googleEmail: "work@gmail.com" }),
+      "msg-1",
+    );
+    expect(c.exports).toEqual(["/tmp/hotel-booking-msg1.eml"]);
+    expect(result).toMatchObject({
+      ok: true,
+      account_email: "work@gmail.com",
+      subject: "Hotel booking",
+      format: "eml",
+      file: "/tmp/hotel-booking-msg1.eml",
+    });
   });
 });

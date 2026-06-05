@@ -32,8 +32,43 @@ model TgUser {
   memories  Memory[]
   messages  ConversationMessage[]
   savedPlaces SavedPlace[]
+  gmailAccounts GmailAccount[]
+  oauthStates   OAuthState[]
 
   @@map("tg_users")
+}
+
+model OAuthState {
+  id         String   @id
+  telegramId BigInt   @map("telegram_id")
+  provider   String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("oauth_states")
+}
+
+model GmailAccount {
+  id               Int      @id @default(autoincrement())
+  telegramId       BigInt   @map("telegram_id")
+  googleEmail      String   @map("google_email")
+  accessTokenEnc   String   @map("access_token_enc")
+  refreshTokenEnc  String   @map("refresh_token_enc")
+  tokenExpiresAt   DateTime @map("token_expires_at")
+  scopes           String
+  status           String   @default("active")
+  connectedAt      DateTime @default(now()) @map("connected_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user TgUser @relation(fields: [telegramId], references: [telegramId], onDelete: Cascade)
+
+  @@unique([telegramId, googleEmail])
+  @@index([telegramId])
+  @@index([telegramId, status])
+  @@map("gmail_accounts")
 }
 
 model AppState {

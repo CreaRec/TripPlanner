@@ -16,7 +16,9 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
                       |
                       +-->  OpenAI API (chat + embeddings)
                       +-->  Google Places API (optional place enrichment)
+                      +-->  Gmail API via OAuth (optional per-user email search)
                       +-->  ./data/exports (PDF / CSV)
+                      +-->  HTTPS /trip-planner/oauth/* (optional OAuth callback)
 ```
 
 ## Features (MVP)
@@ -27,8 +29,9 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
 - Places: save points of interest with category, notes, kid-friendly flag, and optional Google Places enrichment.
 - Itinerary: day-by-day plans with ordered items.
 - Export: generate PDF and CSV of an itinerary, delivered as Telegram documents.
+- Gmail (optional): connect one or more Gmail inboxes, search trip/booking emails, export a message as `.eml` on request.
 
-Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web search, auto-booking, Redis cache/jobs.
+Deferred (not in MVP): KML export, web search, auto-booking, Redis cache/jobs.
 
 ## Requirements
 
@@ -37,6 +40,23 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - An OpenAI API key
 - Optional: a Google Maps Platform key (Places API (New), Routes, Static Maps, Weather as needed)
+- Optional: Gmail OAuth credentials (Gmail API + OAuth Web client) for per-user email search
+
+## Gmail integration (optional)
+
+1. In Google Cloud: enable **Gmail API**, add scope `https://www.googleapis.com/auth/gmail.readonly` on the OAuth consent screen, create an OAuth **Web** client with redirect URI `https://<your-domain>/trip-planner/oauth/google/callback`.
+2. Set in `.env`: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`, `PUBLIC_APP_URL`, `OAUTH_TOKEN_ENCRYPTION_KEY` (`openssl rand -hex 32`), `HTTP_PORT` (default `3000`).
+3. In your HTTPS nginx `server { }` block include both snippets (deploy installs them under `/etc/nginx/snippets/`):
+
+   ```nginx
+   include /etc/nginx/snippets/crea-trip-planner-static.conf;
+   include /etc/nginx/snippets/crea-trip-planner-oauth.conf;
+   ```
+
+4. Apply the Prisma migration that adds `gmail_accounts` and `oauth_states`.
+5. In Telegram: say "connect gmail" or "подключить почту" → open the link → allow access. Repeat to add more inboxes. Ask "which inboxes are connected?" to list linked mailboxes.
+
+While the OAuth app is in **Testing**, add each Google account email under **Test users** in Google Cloud.
 
 ## Setup
 
@@ -75,7 +95,7 @@ Deferred (not in MVP): external maps/geocoding/routing APIs, KML export, web sea
 | --- | --- |
 | `scripts/start-local.sh` | Local dev: bring up Docker Postgres, generate client, migrate, run the bot with reload. |
 | `scripts/start-server.sh` | On the server: verify Docker, ensure the DB container is healthy, run `prisma migrate deploy`. The bot itself is managed by systemd. |
-| `scripts/deploy.sh` | Sync the project to the Debian server, build (incl. `prisma generate`), migrate, install/restart the `telegram-trip-planner` systemd service. |
+| `scripts/deploy.sh` | Run tests locally, then sync the project to the Debian server, build (incl. `prisma generate`), migrate, install/restart the `telegram-trip-planner` systemd service. Aborts if tests fail. |
 
 ## Tests
 
@@ -106,6 +126,10 @@ SERVER_HOST=192.168.1.135 SSH_USER=crearec ./scripts/deploy.sh
 
 Override any of: `SERVER_HOST`, `SSH_USER`, `REMOTE_APP_DIR`, `SERVICE_NAME`.
 
+The deploy script reuses one SSH connection and one `sudo` session on the server, so you should
+only be prompted for the server login password once and the sudo password once (if password auth
+is used). For zero prompts, use SSH keys and passwordless sudo for the deploy user.
+
 Make sure `.env` exists in `REMOTE_APP_DIR` on the server (the deploy script never overwrites it).
 
 ## Project layout
@@ -117,10 +141,12 @@ prisma/migrations/          Committed Prisma migrations
 src/config.ts               Env loading/validation
 src/db/prisma.ts            PrismaClient singleton
 src/openai/                 OpenAI client + embeddings
-src/services/               trips, places, itinerary, memories, messages, users, export
+src/services/               trips, places, itinerary, memories, gmail, messages, users, export
+src/http/                   OAuth HTTP server (public /trip-planner/oauth/google/*, /health)
 src/agent/                  system prompt, tools, agent loop, memory extraction
 src/bot/                    Telegraf bot
-src/index.ts                Entry point
+src/index.ts                Entry point (bot + optional HTTP server)
 scripts/                    start-local, start-server, deploy, shared lib
-deploy/                     systemd unit template
+deploy/                     systemd unit + nginx snippets (static + oauth)
+web/                        public pages for Google OAuth branding
 ```

@@ -15,6 +15,11 @@ import {
 import { listReservations } from "../services/reservations";
 import { listSavedPlaces } from "../services/savedPlaces";
 import { getActiveTripId } from "../services/users";
+import { formatGmailContextLine, listAccounts } from "../services/gmailAccounts";
+import {
+  formatGmailSearchSessionContext,
+  getGmailSearchSession,
+} from "../services/gmailSearchSession";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
@@ -33,6 +38,7 @@ const DESTRUCTIVE_TOOL_NAMES = new Set([
   "delete_day",
   "delete_memory",
   "delete_interesting_place",
+  "disconnect_gmail_account",
 ]);
 
 function sortedJson(value: unknown): string {
@@ -112,6 +118,16 @@ async function savedPlacesContextLines(telegramId: number): Promise<string[]> {
   ];
 }
 
+async function gmailContextLine(telegramId: number): Promise<string> {
+  const accounts = await listAccounts(telegramId);
+  const lines = [formatGmailContextLine(accounts)];
+  const lastSearch = getGmailSearchSession(telegramId);
+  if (lastSearch) {
+    lines.push(formatGmailSearchSessionContext(lastSearch));
+  }
+  return lines.join("\n");
+}
+
 async function buildContextBlock(
   ctx: AgentContext,
   userText: string,
@@ -121,6 +137,7 @@ async function buildContextBlock(
     const lines = [
       "There is no active trip selected.",
       "If the user wants to plan a trip, create one. If they only want to save a general interesting place, use save_interesting_place without creating a trip.",
+      await gmailContextLine(ctx.telegramId),
       ...(await savedPlacesContextLines(ctx.telegramId)),
     ];
     return lines.join("\n");
@@ -177,6 +194,7 @@ async function buildContextBlock(
   }
 
   lines.push(...savedPlaceLines);
+  lines.push(await gmailContextLine(ctx.telegramId));
 
   if (pendingDelete) {
     lines.push("\nPending destructive action awaiting explicit user confirmation:");

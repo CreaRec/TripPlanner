@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   createTripHandler: vi.fn(),
   saveInterestingPlaceHandler: vi.fn(),
   deletePlaceHandler: vi.fn(),
+  disconnectGmailAccountHandler: vi.fn(),
+  listAccounts: vi.fn(),
 }));
 
 vi.mock("../openai/client", () => ({
@@ -35,6 +37,11 @@ vi.mock("../services/itinerary", () => ({ getItinerary: h.getItinerary }));
 vi.mock("../services/memories", () => ({ searchMemories: h.searchMemories }));
 vi.mock("../services/reservations", () => ({ listReservations: h.listReservations }));
 vi.mock("../services/savedPlaces", () => ({ listSavedPlaces: h.listSavedPlaces }));
+vi.mock("../services/gmailAccounts", () => ({
+  listAccounts: h.listAccounts,
+  formatGmailContextLine: (accounts: unknown[]) =>
+    accounts.length === 0 ? "Gmail: not connected." : "Gmail: connected.",
+}));
 vi.mock("./memory", () => ({ extractMemories: h.extractMemories }));
 vi.mock("./tools", () => ({
   toolDefinitions: [],
@@ -42,6 +49,7 @@ vi.mock("./tools", () => ({
     create_trip: h.createTripHandler,
     save_interesting_place: h.saveInterestingPlaceHandler,
     delete_place: h.deletePlaceHandler,
+    disconnect_gmail_account: h.disconnectGmailAccountHandler,
   },
 }));
 
@@ -53,6 +61,7 @@ beforeEach(() => {
   h.extractMemories.mockResolvedValue(undefined);
   h.getPendingDestructiveAction.mockResolvedValue(null);
   h.listSavedPlaces.mockResolvedValue([]);
+  h.listAccounts.mockResolvedValue([]);
 });
 
 function assistant(content: string) {
@@ -207,6 +216,42 @@ describe("runAgent", () => {
       args: { place_id: 5 },
     });
     expect(result.reply).toBe("Подтвердите удаление этого места.");
+  });
+
+  it("requires confirmation before disconnect_gmail_account runs", async () => {
+    h.getActiveTripId.mockResolvedValueOnce(null);
+    h.recentMessages.mockResolvedValueOnce([]);
+    h.createMock
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "c1",
+                  type: "function",
+                  function: {
+                    name: "disconnect_gmail_account",
+                    arguments: '{"google_email":"work@gmail.com","confirmed":true}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(assistant("Отключить work@gmail.com?"));
+
+    const result = await runAgent(111, "отключи work@gmail.com");
+
+    expect(h.disconnectGmailAccountHandler).not.toHaveBeenCalled();
+    expect(h.savePendingDestructiveAction).toHaveBeenCalledWith(111, null, {
+      toolName: "disconnect_gmail_account",
+      args: { google_email: "work@gmail.com" },
+    });
+    expect(result.reply).toBe("Отключить work@gmail.com?");
   });
 
   it("runs a destructive tool only after matching pending confirmation", async () => {

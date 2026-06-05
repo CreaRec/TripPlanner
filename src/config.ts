@@ -26,8 +26,15 @@ const schema = z.object({
   OPENAI_VISION_MODEL: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
+  OAUTH_TOKEN_ENCRYPTION_KEY: z.string().optional(),
+  PUBLIC_APP_URL: z.string().optional(),
+  HTTP_PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   DATA_DIR: z.string().default("./data/exports"),
+  BOT_HANDLER_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
 });
 
 export interface AppConfig {
@@ -38,8 +45,15 @@ export interface AppConfig {
   openaiVisionModel: string;
   embeddingModel: string;
   googleMapsApiKey?: string;
+  googleOAuthClientId?: string;
+  googleOAuthClientSecret?: string;
+  googleOAuthRedirectUri?: string;
+  oauthTokenEncryptionKey?: string;
+  publicAppUrl?: string;
+  httpPort: number;
   databaseUrl: string;
   dataDir: string;
+  botHandlerTimeoutMs: number;
 }
 
 function build(): AppConfig {
@@ -52,9 +66,31 @@ function build(): AppConfig {
     openaiVisionModel: parsed.OPENAI_VISION_MODEL ?? parsed.OPENAI_MODEL,
     embeddingModel: parsed.EMBEDDING_MODEL,
     googleMapsApiKey: parsed.GOOGLE_MAPS_API_KEY,
+    googleOAuthClientId: parsed.GOOGLE_OAUTH_CLIENT_ID,
+    googleOAuthClientSecret: parsed.GOOGLE_OAUTH_CLIENT_SECRET,
+    googleOAuthRedirectUri: parsed.GOOGLE_OAUTH_REDIRECT_URI,
+    oauthTokenEncryptionKey: parsed.OAUTH_TOKEN_ENCRYPTION_KEY,
+    publicAppUrl: parsed.PUBLIC_APP_URL,
+    httpPort: parsed.HTTP_PORT,
     databaseUrl: parsed.DATABASE_URL,
     dataDir: parsed.DATA_DIR,
+    botHandlerTimeoutMs: parsed.BOT_HANDLER_TIMEOUT_MS,
   };
 }
 
 export const config: AppConfig = build();
+
+export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+
+/** Public URL path prefix for OAuth (nginx proxies this to the internal /oauth/ routes). */
+export const OAUTH_PUBLIC_PATH = "/trip-planner/oauth";
+
+export function isGmailOAuthConfigured(): boolean {
+  return Boolean(
+    config.googleOAuthClientId &&
+      config.googleOAuthClientSecret &&
+      config.googleOAuthRedirectUri &&
+      config.oauthTokenEncryptionKey &&
+      config.publicAppUrl,
+  );
+}
