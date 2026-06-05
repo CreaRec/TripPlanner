@@ -220,16 +220,26 @@ describe("text handler", () => {
   it("exports gmail by number without calling the agent", async () => {
     vi.mocked(exportGmailBySearchIndex).mockResolvedValueOnce({
       ok: true,
-      filePath: "/tmp/hotel-b-msg2.eml",
+      filePath: "/tmp/hotel-b-msg2.pdf",
       subject: "Hotel B",
       index: 2,
     });
     const ctx = fakeCtx({ message: { text: "Дай письмо 2" } });
     await handler("text")(ctx);
     expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 2);
-    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-msg2.eml" });
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("письма 2"));
+    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-msg2.pdf" });
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("PDF"));
     expect(f.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the agent when gmail export has no cached search session", async () => {
+    vi.mocked(exportGmailBySearchIndex).mockResolvedValueOnce({ ok: false, reason: "no_session" });
+    f.runAgent.mockResolvedValueOnce({ reply: "Повторяю поиск и отправляю PDF.", files: ["/tmp/email.pdf"] });
+    const ctx = fakeCtx({ message: { text: "Дай письмо 3" } });
+    await handler("text")(ctx);
+    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 3);
+    expect(f.runAgent).toHaveBeenCalledWith(111, "Дай письмо 3");
+    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/email.pdf" });
   });
 });
 

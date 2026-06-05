@@ -55,26 +55,25 @@ async function replyDirectGmailExport(
     replyWithDocument: (doc: { source: string }) => Promise<unknown>;
   },
   index: number,
-): Promise<void> {
+): Promise<boolean> {
   const result = await exportGmailBySearchIndex(ctx.from.id, index);
   if (!result.ok) {
     if (result.reason === "no_session") {
-      await ctx.reply("Сначала найдите письма — например: «найди письма про отель».");
-      return;
+      return false;
     }
     if (result.reason === "invalid_index") {
       await ctx.reply(
         `В последнем поиске только ${result.count} ${result.count === 1 ? "письмо" : "писем"}. Укажите номер от 1 до ${result.count}.`,
       );
-      return;
+      return true;
     }
     if (result.reason === "account_unavailable") {
       await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
-      return;
+      return true;
     }
     console.error("[bot] direct gmail export failed:", result.message);
     await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
-    return;
+    return true;
   }
 
   try {
@@ -82,12 +81,13 @@ async function replyDirectGmailExport(
   } catch (err) {
     console.error("[bot] failed to send exported gmail file:", result.filePath, err);
     await ctx.reply("Не удалось прикрепить файл. Попробуйте ещё раз.");
-    return;
+    return true;
   }
 
   await ctx.reply(
-    `Готово — .eml файл письма ${result.index} прикреплён. Можно открыть его в Mail, Outlook или Thunderbird.`,
+    `Готово — PDF письма ${result.index} прикреплён. Можно открыть прямо в Telegram или в любом PDF-просмотрщике.`,
   );
+  return true;
 }
 
 async function downloadTelegramFile(ctx: {
@@ -263,12 +263,13 @@ export function createBot(): Telegraf {
     if (exportIndex !== null) {
       await ctx.sendChatAction("upload_document");
       try {
-        await replyDirectGmailExport(ctx, exportIndex);
+        const handled = await replyDirectGmailExport(ctx, exportIndex);
+        if (handled) return;
       } catch (err) {
         console.error("[bot] direct gmail export error:", err);
         await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+        return;
       }
-      return;
     }
 
     await ctx.sendChatAction("typing");

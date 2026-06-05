@@ -1,8 +1,10 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { GmailAccount } from "@prisma/client";
 import { config } from "../config";
-import { fetchGmailMessageRaw } from "./gmailClient";
+import { fetchGmailMessageContent } from "./gmailClient";
+import { buildMessageHtml } from "./gmailMessageHtml";
+import { renderHtmlToPdf } from "./gmailPdf";
 
 export interface GmailExportResult {
   filePath: string;
@@ -27,13 +29,19 @@ function ensureExportDir(): string {
   return dir;
 }
 
-export async function exportGmailMessageToEml(
+export async function exportGmailMessageToPdf(
   account: GmailAccount,
   messageId: string,
 ): Promise<GmailExportResult> {
-  const { raw, subject, from, date } = await fetchGmailMessageRaw(account, messageId);
+  const content = await fetchGmailMessageContent(account, messageId);
+  const html = buildMessageHtml(content);
   const dir = ensureExportDir();
-  const filename = join(dir, `${slugifyEmailFilename(subject)}-${messageId.slice(0, 12)}.eml`);
-  writeFileSync(filename, raw);
-  return { filePath: filename, subject, from, date };
+  const filename = join(dir, `${slugifyEmailFilename(content.subject)}-${messageId.slice(0, 12)}.pdf`);
+  await renderHtmlToPdf(html, filename);
+  return {
+    filePath: filename,
+    subject: content.subject,
+    from: content.from,
+    date: content.date,
+  };
 }

@@ -1,6 +1,6 @@
 import type { GmailSearchOutput } from "./gmailSearch";
 import { getAccountById } from "./gmailAccounts";
-import { exportGmailMessageToEml } from "./gmailExport";
+import { exportGmailMessageToPdf } from "./gmailExport";
 
 const TTL_MS = 60 * 60 * 1000;
 
@@ -12,6 +12,16 @@ interface GmailSearchSessionEntry {
 const sessions = new Map<number, GmailSearchSessionEntry>();
 
 export function saveGmailSearchSession(telegramId: number, data: GmailSearchOutput): void {
+  const existing = sessions.get(telegramId);
+  if (
+    data.messages.length === 0 &&
+    existing &&
+    Date.now() - existing.at <= TTL_MS &&
+    existing.data.messages.length > 0
+  ) {
+    // Keep the prior numbered list when a follow-up search returns nothing (e.g. per-account check).
+    return;
+  }
   sessions.set(telegramId, { at: Date.now(), data });
 }
 
@@ -63,7 +73,7 @@ export async function exportGmailBySearchIndex(
   }
 
   try {
-    const exported = await exportGmailMessageToEml(account, message.id);
+    const exported = await exportGmailMessageToPdf(account, message.id);
     return { ok: true, filePath: exported.filePath, subject: exported.subject, index };
   } catch (err) {
     const messageText = err instanceof Error ? err.message : String(err);

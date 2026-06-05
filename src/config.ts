@@ -35,6 +35,7 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   DATA_DIR: z.string().default("./data/exports"),
   BOT_HANDLER_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
+  CHROMIUM_EXECUTABLE_PATH: z.string().default("/usr/bin/chromium"),
 });
 
 export interface AppConfig {
@@ -54,6 +55,7 @@ export interface AppConfig {
   databaseUrl: string;
   dataDir: string;
   botHandlerTimeoutMs: number;
+  chromiumExecutablePath: string;
 }
 
 function build(): AppConfig {
@@ -75,6 +77,7 @@ function build(): AppConfig {
     databaseUrl: parsed.DATABASE_URL,
     dataDir: parsed.DATA_DIR,
     botHandlerTimeoutMs: parsed.BOT_HANDLER_TIMEOUT_MS,
+    chromiumExecutablePath: parsed.CHROMIUM_EXECUTABLE_PATH,
   };
 }
 

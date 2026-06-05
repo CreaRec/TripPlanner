@@ -55,7 +55,7 @@ const GMAIL_CONNECT_HINT = 'Say "подключить почту" or "connect gm
 import { buildGmailSearchQuery } from "../services/gmailSearchQuery";
 import { searchGmailAccounts } from "../services/gmailSearch";
 import { saveGmailSearchSession } from "../services/gmailSearchSession";
-import { exportGmailMessageToEml } from "../services/gmailExport";
+import { exportGmailMessageToPdf } from "../services/gmailExport";
 import { getPlace } from "../services/places";
 
 export interface AgentContext {
@@ -811,7 +811,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "export_gmail_message",
       description:
-        "Export a Gmail message to a .eml file (preserves HTML, images, links, attachments). Use when the user asks to read, show, open, or export a specific email found via search_gmail. Requires gmail_account_id and message_id from search results.",
+        "Export a Gmail message to a PDF file (renders HTML with inline images). Use when the user asks to read, show, open, or export a specific email found via search_gmail. Requires gmail_account_id and message_id from search results.",
       parameters: {
         type: "object",
         properties: {
@@ -1703,7 +1703,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       throw new Error("message_id is required.");
     }
 
-    const exported = await exportGmailMessageToEml(account, messageId);
+    const exported = await exportGmailMessageToPdf(account, messageId);
     ctx.exports.push(exported.filePath);
 
     return {
@@ -1712,10 +1712,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
       subject: exported.subject,
       from: exported.from,
       date: exported.date,
-      format: "eml",
+      format: "pdf",
       file: exported.filePath,
       instruction:
-        "Tell the user the .eml file is attached. They can open it in Mail, Outlook, or Thunderbird. Do not paste the email body in the chat.",
+        "Tell the user the PDF file is attached. They can open it directly in Telegram or any PDF viewer. Do not paste the email body in the chat.",
     };
   },
 

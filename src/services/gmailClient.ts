@@ -4,6 +4,15 @@ import { config, GMAIL_READONLY_SCOPE } from "../config";
 import { decrypt } from "./tokenCrypto";
 import { markAccountInvalid, updateAccountTokens } from "./gmailAccounts";
 
+export interface GmailMessagePart {
+  partId?: string | null;
+  mimeType?: string | null;
+  filename?: string | null;
+  headers?: { name?: string | null; value?: string | null }[] | null;
+  body?: { size?: number | null; data?: string | null; attachmentId?: string | null } | null;
+  parts?: GmailMessagePart[] | null;
+}
+
 export interface GmailMessageSummary {
   id: string;
   threadId: string;
@@ -13,11 +22,11 @@ export interface GmailMessageSummary {
   snippet: string;
 }
 
-export interface GmailMessageRawExport {
-  raw: Buffer;
+export interface GmailMessageContentExport {
   subject: string;
   from: string;
   date: string | null;
+  payload: GmailMessagePart | null | undefined;
 }
 
 function createOAuthClient() {
@@ -69,7 +78,7 @@ async function getAccessToken(account: GmailAccount): Promise<string> {
   return refreshAccessToken(account);
 }
 
-function decodeBase64Url(data: string): Buffer {
+export function decodeBase64Url(data: string): Buffer {
   const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
   return Buffer.from(normalized, "base64");
 }
@@ -93,27 +102,18 @@ function headerValue(
   return found?.value?.trim() ?? "";
 }
 
-export async function fetchGmailMessageRaw(
+export async function fetchGmailMessageContent(
   account: GmailAccount,
   messageId: string,
-): Promise<GmailMessageRawExport> {
+): Promise<GmailMessageContentExport> {
   const gmail = await createAuthenticatedGmail(account);
-  let rawResponse;
-  let metaResponse;
+  let response;
   try {
-    [rawResponse, metaResponse] = await Promise.all([
-      gmail.users.messages.get({
-        userId: "me",
-        id: messageId,
-        format: "raw",
-      }),
-      gmail.users.messages.get({
-        userId: "me",
-        id: messageId,
-        format: "metadata",
-        metadataHeaders: ["Subject", "From", "Date"],
-      }),
-    ]);
+    response = await gmail.users.messages.get({
+      userId: "me",
+      id: messageId,
+      format: "full",
+    });
   } catch (err) {
     if (isInvalidGrantError(err)) {
       await markAccountInvalid(account.id);
@@ -121,21 +121,17 @@ export async function fetchGmailMessageRaw(
     throw err;
   }
 
-  const rawData = rawResponse.data.raw;
-  if (!rawData) {
-    throw new Error("Gmail did not return raw message content.");
-  }
-
-  const headers = metaResponse.data.payload?.headers;
-  const internalDate = metaResponse.data.internalDate
-    ? new Date(Number(metaResponse.data.internalDate)).toISOString()
+  const payload = response.data.payload as GmailMessagePart | undefined;
+  const headers = payload?.headers;
+  const internalDate = response.data.internalDate
+    ? new Date(Number(response.data.internalDate)).toISOString()
     : null;
 
   return {
-    raw: decodeBase64Url(rawData),
-    subject: headerValue(headers, "Subject") || "(no subject)",
-    from: headerValue(headers, "From") || "(unknown sender)",
-    date: headerValue(headers, "Date") || internalDate,
+    subject: headerValue(headers ?? undefined, "Subject") || "(no subject)",
+    from: headerValue(headers ?? undefined, "From") || "(unknown sender)",
+    date: headerValue(headers ?? undefined, "Date") || internalDate,
+    payload,
   };
 }
 

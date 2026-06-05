@@ -29,7 +29,7 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
 - Places: save points of interest with category, notes, kid-friendly flag, and optional Google Places enrichment.
 - Itinerary: day-by-day plans with ordered items.
 - Export: generate PDF and CSV of an itinerary, delivered as Telegram documents.
-- Gmail (optional): connect one or more Gmail inboxes, search trip/booking emails, export a message as `.eml` on request.
+- Gmail (optional): connect one or more Gmail inboxes, search trip/booking emails, export a message as PDF on request.
 
 Deferred (not in MVP): KML export, web search, auto-booking, Redis cache/jobs.
 
@@ -57,6 +57,15 @@ Deferred (not in MVP): KML export, web search, auto-booking, Redis cache/jobs.
 5. In Telegram: say "connect gmail" or "подключить почту" → open the link → allow access. Repeat to add more inboxes. Ask "which inboxes are connected?" to list linked mailboxes.
 
 While the OAuth app is in **Testing**, add each Google account email under **Test users** in Google Cloud.
+
+Email export renders the message HTML to PDF via system Chromium. On the server install `chromium` (Debian: `sudo apt install chromium`) and set `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` if needed. Separate file attachments (non-inline) are not included in the PDF; remote images require outbound network during render.
+
+Smoke test on the server:
+
+```bash
+chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
+  --print-to-pdf=/tmp/test.pdf https://example.com && ls -lh /tmp/test.pdf
+```
 
 ## Setup
 
