@@ -59,4 +59,21 @@ describe("config", () => {
     expect(config.httpPort).toBe(3001);
     expect(isGmailOAuthConfigured()).toBe(true);
   });
+
+  it("uses defaults when optional export env vars are empty strings", async () => {
+    vi.stubEnv("EXPORT_CACHE_MAX_AGE_DAYS", "");
+    vi.stubEnv("EXPORT_BUCKET_MAX_BYTES", "");
+    vi.stubEnv("EXPORT_RETENTION_INTERVAL_MS", "");
+    const { config, isExportStorageConfigured } = await import("./config");
+    expect(config.exportCacheMaxAgeDays).toBe(30);
+    expect(config.exportBucketMaxBytes).toBe(4_294_967_296);
+    expect(config.exportRetentionIntervalMs).toBe(86_400_000);
+    expect(isExportStorageConfigured()).toBe(false);
+  });
+
+  it("uses defaults when optional export env vars are invalid numbers", async () => {
+    vi.stubEnv("EXPORT_RETENTION_INTERVAL_MS", "not-a-number");
+    const { config } = await import("./config");
+    expect(config.exportRetentionIntervalMs).toBe(86_400_000);
+  });
 });

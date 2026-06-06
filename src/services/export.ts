@@ -1,11 +1,23 @@
+import { createHash } from "node:crypto";
 import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Trip } from "@prisma/client";
+import type { Place, Trip } from "@prisma/client";
 import PDFDocument from "pdfkit";
-import { config } from "../config";
+import { config, isExportStorageConfigured } from "../config";
 import { fromDate } from "../util";
+import {
+  getCachedExport,
+  itineraryExportKey,
+  materializeSingleForTelegram,
+  storeExportFromFile,
+} from "./exportStorage";
 import { getItinerary, type ItineraryDayWithItems } from "./itinerary";
 import { listPlaces } from "./places";
+
+export interface ItineraryExportResult {
+  path: string;
+  cached: boolean;
+}
 
 function ensureDataDir(): string {
   const dir = resolve(config.dataDir);
@@ -23,6 +35,66 @@ function slugify(value: string): string {
   );
 }
 
+function stableTripSnapshot(trip: Trip) {
+  return {
+    id: trip.id,
+    title: trip.title,
+    destination: trip.destination,
+    startDate: fromDate(trip.startDate),
+    endDate: fromDate(trip.endDate),
+    travelers: trip.travelers,
+    summary: trip.summary,
+    status: trip.status,
+  };
+}
+
+function stableItinerarySnapshot(itinerary: ItineraryDayWithItems[]) {
+  return itinerary.map((day) => ({
+    dayNumber: day.dayNumber,
+    date: fromDate(day.date),
+    title: day.title,
+    summary: day.summary,
+    items: day.items.map((item) => ({
+      position: item.position,
+      title: item.title,
+      timeBlock: item.timeBlock,
+      notes: item.notes,
+      isBackup: item.isBackup,
+      placeId: item.placeId,
+    })),
+  }));
+}
+
+function stablePlacesSnapshot(places: Place[]) {
+  return [...places]
+    .sort((a, b) => a.id - b.id)
+    .map((place) => ({
+      id: place.id,
+      name: place.name,
+      category: place.category,
+      address: place.address,
+      kidFriendly: place.kidFriendly,
+      notes: place.notes,
+    }));
+}
+
+export function computeItineraryExportFingerprint(
+  trip: Trip,
+  itinerary: ItineraryDayWithItems[],
+  places: Place[],
+  format: "pdf" | "csv",
+): string {
+  const snapshot: Record<string, unknown> = {
+    format,
+    trip: stableTripSnapshot(trip),
+    itinerary: stableItinerarySnapshot(itinerary),
+  };
+  if (format === "pdf") {
+    snapshot.places = stablePlacesSnapshot(places);
+  }
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+
 function dayHeader(day: ItineraryDayWithItems): string {
   const parts = [`Day ${day.dayNumber}`];
   const date = fromDate(day.date);
@@ -31,12 +103,12 @@ function dayHeader(day: ItineraryDayWithItems): string {
   return parts.join(" - ");
 }
 
-export async function exportItineraryPdf(trip: Trip): Promise<string> {
-  const dir = ensureDataDir();
-  const itinerary = await getItinerary(trip.id);
-  const places = await listPlaces(trip.id);
-  const filename = join(dir, `${slugify(trip.title)}-${trip.id}.pdf`);
-
+async function writeItineraryPdf(
+  trip: Trip,
+  itinerary: ItineraryDayWithItems[],
+  places: Place[],
+  filename: string,
+): Promise<void> {
   await new Promise<void>((resolvePromise, reject) => {
     const doc = new PDFDocument({ margin: 50 });
     const stream = createWriteStream(filename);
@@ -98,8 +170,33 @@ export async function exportItineraryPdf(trip: Trip): Promise<string> {
 
     doc.end();
   });
+}
 
-  return filename;
+export async function exportItineraryPdf(
+  trip: Trip,
+  options?: { forceRefresh?: boolean },
+): Promise<ItineraryExportResult> {
+  const itinerary = await getItinerary(trip.id);
+  const places = await listPlaces(trip.id);
+  const fingerprint = computeItineraryExportFingerprint(trip, itinerary, places, "pdf");
+  const s3Key = itineraryExportKey(trip.id, "pdf");
+
+  if (isExportStorageConfigured() && !options?.forceRefresh) {
+    const cached = await getCachedExport(s3Key, { expectedFingerprint: fingerprint });
+    if (cached) {
+      return { path: await materializeSingleForTelegram(s3Key), cached: true };
+    }
+  }
+
+  const dir = ensureDataDir();
+  const filename = join(dir, `${slugify(trip.title)}-${trip.id}.pdf`);
+  await writeItineraryPdf(trip, itinerary, places, filename);
+
+  if (isExportStorageConfigured()) {
+    await storeExportFromFile(s3Key, filename, "application/pdf", { fingerprint });
+  }
+
+  return { path: filename, cached: false };
 }
 
 function csvCell(value: unknown): string {
@@ -110,9 +207,23 @@ function csvCell(value: unknown): string {
   return s;
 }
 
-export async function exportItineraryCsv(trip: Trip): Promise<string> {
-  const dir = ensureDataDir();
+export async function exportItineraryCsv(
+  trip: Trip,
+  options?: { forceRefresh?: boolean },
+): Promise<ItineraryExportResult> {
   const itinerary = await getItinerary(trip.id);
+  const places = await listPlaces(trip.id);
+  const fingerprint = computeItineraryExportFingerprint(trip, itinerary, places, "csv");
+  const s3Key = itineraryExportKey(trip.id, "csv");
+
+  if (isExportStorageConfigured() && !options?.forceRefresh) {
+    const cached = await getCachedExport(s3Key, { expectedFingerprint: fingerprint });
+    if (cached) {
+      return { path: await materializeSingleForTelegram(s3Key), cached: true };
+    }
+  }
+
+  const dir = ensureDataDir();
   const filename = join(dir, `${slugify(trip.title)}-${trip.id}.csv`);
 
   const header = ["day_number", "date", "day_title", "position", "time_block", "item", "is_backup", "notes"];
@@ -134,5 +245,10 @@ export async function exportItineraryCsv(trip: Trip): Promise<string> {
   }
 
   writeFileSync(filename, lines.join("\n"), "utf8");
-  return filename;
+
+  if (isExportStorageConfigured()) {
+    await storeExportFromFile(s3Key, filename, "text/csv", { fingerprint });
+  }
+
+  return { path: filename, cached: false };
 }

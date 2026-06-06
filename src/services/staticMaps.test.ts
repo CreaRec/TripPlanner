@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRouteComparisonStaticMapUrl, generateRouteComparisonMap } from "./staticMaps";
+import { hashRouteMapInput } from "./exportStorage";
 import { encodePolyline } from "./routeGeometry";
 
 const input = {
@@ -39,7 +40,6 @@ describe("staticMaps", () => {
   });
 
   it("downloads and saves a PNG file", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(123);
     const png = Buffer.from("png");
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(png, {
@@ -54,8 +54,9 @@ describe("staticMaps", () => {
       filenamePrefix: "urban-hill-map",
     });
 
+    const routeHash = hashRouteMapInput(input);
     expect(fetchImpl).toHaveBeenCalledWith(expect.stringContaining("maps.googleapis.com/maps/api/staticmap"));
-    expect(file).toContain("urban-hill-map-123.png");
+    expect(file).toContain(`urban-hill-map-${routeHash.slice(0, 12)}.png`);
     expect(existsSync(file)).toBe(true);
     expect(readFileSync(file)).toEqual(png);
   });

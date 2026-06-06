@@ -228,7 +228,7 @@ describe("text handler", () => {
     });
     const ctx = fakeCtx({ message: { text: "Дай письмо 2" } });
     await handler("text")(ctx);
-    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 2);
+    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 2, { forceRefresh: false });
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-msg2.pdf" });
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-ticket.pdf" });
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("PDF"));
@@ -241,7 +241,7 @@ describe("text handler", () => {
     f.runAgent.mockResolvedValueOnce({ reply: "Повторяю поиск и отправляю PDF.", files: ["/tmp/email.pdf"] });
     const ctx = fakeCtx({ message: { text: "Дай письмо 3" } });
     await handler("text")(ctx);
-    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 3);
+    expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 3, { forceRefresh: false });
     expect(f.runAgent).toHaveBeenCalledWith(111, "Дай письмо 3");
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/email.pdf" });
   });

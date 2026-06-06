@@ -14,11 +14,11 @@ const { tmp, getItineraryMock, listPlacesMock } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config", () => ({ config: { dataDir: tmp } }));
+vi.mock("../config", () => ({ config: { dataDir: tmp }, isExportStorageConfigured: () => false }));
 vi.mock("./itinerary", () => ({ getItinerary: getItineraryMock }));
 vi.mock("./places", () => ({ listPlaces: listPlacesMock }));
 
-import { exportItineraryCsv, exportItineraryPdf } from "./export";
+import { exportItineraryCsv, exportItineraryPdf, computeItineraryExportFingerprint } from "./export";
 
 const trip = {
   id: 7,
@@ -55,9 +55,10 @@ describe("exportItineraryCsv", () => {
     listPlacesMock.mockResolvedValue([]);
 
     const file = await exportItineraryCsv(trip);
-    expect(file).toBe(join(tmp, "family-roadtrip-7.csv"));
+    expect(file.path).toBe(join(tmp, "family-roadtrip-7.csv"));
+    expect(file.cached).toBe(false);
 
-    const content = readFileSync(file, "utf8");
+    const content = readFileSync(file.path, "utf8");
     const lines = content.split("\n");
     expect(lines[0]).toBe("day_number,date,day_title,position,time_block,item,is_backup,notes");
     expect(lines[1]).toContain('"Near, kid-friendly"'); // comma triggers quoting
@@ -71,7 +72,7 @@ describe("exportItineraryCsv", () => {
     ]);
     listPlacesMock.mockResolvedValue([]);
     const file = await exportItineraryCsv(trip);
-    const lines = readFileSync(file, "utf8").trim().split("\n");
+    const lines = readFileSync(file.path, "utf8").trim().split("\n");
     expect(lines).toHaveLength(2);
   });
 });
@@ -84,7 +85,36 @@ describe("exportItineraryPdf", () => {
     ]);
 
     const file = await exportItineraryPdf(trip);
-    expect(file).toBe(join(tmp, "family-roadtrip-7.pdf"));
-    expect(statSync(file).size).toBeGreaterThan(0);
+    expect(file.path).toBe(join(tmp, "family-roadtrip-7.pdf"));
+    expect(file.cached).toBe(false);
+    expect(statSync(file.path).size).toBeGreaterThan(0);
+  });
+});
+
+describe("computeItineraryExportFingerprint", () => {
+  it("returns the same hash for identical export data", () => {
+    const places = [
+      { id: 1, name: "Scenic viewpoint", category: "natural_attraction", address: null, kidFriendly: true, notes: "Short walk" },
+    ] as never;
+    const first = computeItineraryExportFingerprint(trip, itinerary, places, "pdf");
+    const second = computeItineraryExportFingerprint(trip, itinerary, places, "pdf");
+    expect(first).toBe(second);
+  });
+
+  it("changes when itinerary items change", () => {
+    const places = [] as never;
+    const before = computeItineraryExportFingerprint(trip, itinerary, places, "csv");
+    const changed = computeItineraryExportFingerprint(
+      trip,
+      [
+        {
+          ...itinerary[0]!,
+          items: [...itinerary[0]!.items, { id: 3, position: 2, title: "Dinner", timeBlock: "19:00", notes: null, isBackup: false }],
+        },
+      ],
+      places,
+      "csv",
+    );
+    expect(before).not.toBe(changed);
   });
 });

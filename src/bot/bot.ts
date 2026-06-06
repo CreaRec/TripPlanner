@@ -56,8 +56,9 @@ async function replyDirectGmailExport(
     replyWithDocument: (doc: { source: string }) => Promise<unknown>;
   },
   index: number,
+  options?: { forceRefresh?: boolean },
 ): Promise<boolean> {
-  const result = await exportGmailBySearchIndex(ctx.from.id, index);
+  const result = await exportGmailBySearchIndex(ctx.from.id, index, options);
   if (!result.ok) {
     if (result.reason === "no_session") {
       return false;
@@ -274,11 +275,13 @@ export function createBot(): Telegraf {
       return;
     }
 
-    const exportIndex = parseExportGmailByNumberRequest(text);
-    if (exportIndex !== null) {
+    const exportRequest = parseExportGmailByNumberRequest(text);
+    if (exportRequest !== null) {
       await ctx.sendChatAction("upload_document");
       try {
-        const handled = await replyDirectGmailExport(ctx, exportIndex);
+        const handled = await replyDirectGmailExport(ctx, exportRequest.index, {
+          forceRefresh: exportRequest.forceRefresh,
+        });
         if (handled) return;
       } catch (err) {
         console.error("[bot] direct gmail export error:", err);

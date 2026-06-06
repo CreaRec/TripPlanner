@@ -63,6 +63,7 @@ export type ExportGmailBySearchIndexResult =
 export async function exportGmailBySearchIndex(
   telegramId: number,
   index: number,
+  options?: { forceRefresh?: boolean },
 ): Promise<ExportGmailBySearchIndexResult> {
   const session = getGmailSearchSession(telegramId);
   if (!session || session.messages.length === 0) {
@@ -80,7 +81,9 @@ export async function exportGmailBySearchIndex(
   }
 
   try {
-    const exported = await exportGmailMessageToPdf(account, message.id);
+    const exported = await exportGmailMessageToPdf(account, message.id, {
+      forceRefresh: options?.forceRefresh,
+    });
     return {
       ok: true,
       filePaths: [exported.filePath, ...exported.attachmentFiles],

@@ -3,6 +3,7 @@ import { config, isGmailOAuthConfigured } from "./config";
 import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
 import { createHttpServer } from "./http/server";
+import { scheduleExportRetention } from "./services/exportRetention";
 
 async function main(): Promise<void> {
   console.log("[startup] verifying database connection...");
@@ -28,9 +29,11 @@ async function main(): Promise<void> {
   }
 
   const bot = createBot();
+  const retentionTimer = scheduleExportRetention();
 
   const shutdown = async (signal: string) => {
     console.log(`[shutdown] received ${signal}, stopping...`);
+    if (retentionTimer) clearInterval(retentionTimer);
     bot.stop(signal);
     if (httpServer) {
       await new Promise<void>((resolve) => httpServer!.close(() => resolve()));

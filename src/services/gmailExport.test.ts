@@ -15,8 +15,14 @@ vi.mock("node:fs", () => ({
 vi.mock("./gmailClient", () => ({ fetchGmailMessageContent: mocks.fetchGmailMessageContent }));
 vi.mock("./gmailMessageHtml", () => ({ buildMessageHtml: mocks.buildMessageHtml }));
 vi.mock("./gmailPdf", () => ({ renderHtmlToPdf: mocks.renderHtmlToPdf }));
-vi.mock("./gmailAttachments", () => ({ downloadGmailAttachments: mocks.downloadGmailAttachments }));
-vi.mock("../config", () => ({ config: { dataDir: "/tmp/gmail-exports" } }));
+vi.mock("./gmailAttachments", () => ({
+  downloadGmailAttachments: mocks.downloadGmailAttachments,
+  sanitizeAttachmentFilename: (name: string) => name,
+}));
+vi.mock("../config", () => ({
+  config: { dataDir: "/tmp/gmail-exports" },
+  isExportStorageConfigured: () => false,
+}));
 
 import {
   exportGmailMessageToPdf,
@@ -77,6 +83,7 @@ describe("exportGmailMessageToPdf", () => {
       subject: "Hotel booking",
       from: "hotel@example.com",
       date: "Mon, 2 Jun 2026 10:00:00 +0000",
+      cached: false,
     });
   });
 });

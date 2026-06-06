@@ -1,6 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { config } from "../config";
+import { config, isExportStorageConfigured } from "../config";
+import {
+  getCachedExport,
+  hashRouteMapInput,
+  materializeSingleForTelegram,
+  routeMapExportKey,
+  storeExportObject,
+} from "./exportStorage";
 import {
   decodeEncodedPolyline,
   encodePolyline,
@@ -30,6 +37,7 @@ export interface RouteComparisonMapInput {
   width?: number;
   height?: number;
   filenamePrefix?: string;
+  forceRefresh?: boolean;
 }
 
 function requireApiKey(apiKey = config.googleMapsApiKey): string {
@@ -106,6 +114,16 @@ export function buildRouteComparisonStaticMapUrl(input: RouteComparisonMapInput)
 }
 
 export async function generateRouteComparisonMap(input: RouteComparisonMapInput): Promise<string> {
+  const routeHash = hashRouteMapInput(input);
+  const s3Key = routeMapExportKey(routeHash);
+
+  if (isExportStorageConfigured() && !input.forceRefresh) {
+    const cached = await getCachedExport(s3Key);
+    if (cached) {
+      return materializeSingleForTelegram(s3Key);
+    }
+  }
+
   const fetchImpl = input.fetchImpl ?? fetch;
   const url = buildRouteComparisonStaticMapUrl(input);
   const response = await fetchImpl(url);
@@ -113,12 +131,19 @@ export async function generateRouteComparisonMap(input: RouteComparisonMapInput)
     throw new Error(`Google Static Maps API request failed (${response.status}): ${await response.text()}`);
   }
 
+  const bytes = Buffer.from(await response.arrayBuffer());
+
+  if (isExportStorageConfigured()) {
+    await storeExportObject(s3Key, bytes, "image/png");
+    return materializeSingleForTelegram(s3Key);
+  }
+
   const dir = ensureDataDir();
   const filename = join(
     dir,
-    `${slugify(input.filenamePrefix ?? `${input.origin}-${input.stopName}-${input.destination}`)}-${Date.now()}.png`,
+    `${slugify(input.filenamePrefix ?? `${input.origin}-${input.stopName}-${input.destination}`)}-${routeHash.slice(0, 12)}.png`,
   );
-  writeFileSync(filename, Buffer.from(await response.arrayBuffer()));
+  writeFileSync(filename, bytes);
   return filename;
 }
 

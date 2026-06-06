@@ -38,11 +38,13 @@ describe("isConnectGmailRequest", () => {
 
 describe("parseExportGmailByNumberRequest", () => {
   it("matches export-by-number phrases", () => {
-    expect(parseExportGmailByNumberRequest("Дай письмо 2")).toBe(2);
-    expect(parseExportGmailByNumberRequest("дай письмо 3")).toBe(3);
-    expect(parseExportGmailByNumberRequest("письмо 1")).toBe(1);
-    expect(parseExportGmailByNumberRequest("email 4")).toBe(4);
-    expect(parseExportGmailByNumberRequest("export message 5")).toBe(5);
+    expect(parseExportGmailByNumberRequest("Дай письмо 2")).toEqual({ index: 2, forceRefresh: false });
+    expect(parseExportGmailByNumberRequest("дай письмо 3")).toEqual({ index: 3, forceRefresh: false });
+    expect(parseExportGmailByNumberRequest("письмо 1")).toEqual({ index: 1, forceRefresh: false });
+    expect(parseExportGmailByNumberRequest("email 4")).toEqual({ index: 4, forceRefresh: false });
+    expect(parseExportGmailByNumberRequest("export message 5")).toEqual({ index: 5, forceRefresh: false });
+    expect(parseExportGmailByNumberRequest("обнови письмо 2")).toEqual({ index: 2, forceRefresh: true });
+    expect(parseExportGmailByNumberRequest("refresh email 3")).toEqual({ index: 3, forceRefresh: true });
   });
 
   it("does not match search or unrelated text", () => {

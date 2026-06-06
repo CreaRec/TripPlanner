@@ -1,8 +1,22 @@
 import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { GmailAccount } from "@prisma/client";
-import { config } from "../config";
-import { downloadGmailAttachments, type SkippedGmailAttachment } from "./gmailAttachments";
+import { config, isExportStorageConfigured } from "../config";
+import {
+  downloadGmailAttachments,
+  sanitizeAttachmentFilename,
+  type SkippedGmailAttachment,
+} from "./gmailAttachments";
+import {
+  getCachedGmailExport,
+  gmailAttachmentKey,
+  gmailExportPrefix,
+  gmailPdfKey,
+  invalidateExport,
+  materializeForTelegram,
+  storeExportFromFile,
+  storeGmailExportManifest,
+} from "./exportStorage";
 import { fetchGmailMessageContent } from "./gmailClient";
 import { buildMessageHtml } from "./gmailMessageHtml";
 import { renderHtmlToPdf } from "./gmailPdf";
@@ -14,6 +28,7 @@ export interface GmailExportResult {
   subject: string;
   from: string;
   date: string | null;
+  cached: boolean;
 }
 
 export function formatSkippedAttachmentsNote(
@@ -77,12 +92,33 @@ function ensureExportDir(): string {
 export async function exportGmailMessageToPdf(
   account: GmailAccount,
   messageId: string,
+  options?: { forceRefresh?: boolean },
 ): Promise<GmailExportResult> {
+  if (isExportStorageConfigured() && !options?.forceRefresh) {
+    const cached = await getCachedGmailExport(account.id, messageId);
+    if (cached) {
+      const paths = await materializeForTelegram(cached.keys);
+      return {
+        filePath: paths[0]!,
+        attachmentFiles: paths.slice(1),
+        skippedAttachments: cached.manifest.skippedAttachments,
+        subject: cached.manifest.subject,
+        from: cached.manifest.from,
+        date: cached.manifest.date,
+        cached: true,
+      };
+    }
+  }
+
+  if (isExportStorageConfigured() && options?.forceRefresh) {
+    await invalidateExport(gmailExportPrefix(account.id, messageId));
+  }
+
   const content = await fetchGmailMessageContent(account, messageId);
   const html = buildMessageHtml(content);
   const dir = ensureExportDir();
-  const filename = join(dir, `${slugifyEmailFilename(content.subject)}-${messageId.slice(0, 12)}.pdf`);
-  await renderHtmlToPdf(html, filename);
+  const localPdf = join(dir, `${slugifyEmailFilename(content.subject)}-${messageId.slice(0, 12)}.pdf`);
+  await renderHtmlToPdf(html, localPdf);
 
   const attachments = await downloadGmailAttachments(
     account,
@@ -91,12 +127,35 @@ export async function exportGmailMessageToPdf(
     dir,
   );
 
+  if (isExportStorageConfigured()) {
+    const pdfKey = gmailPdfKey(account.id, messageId);
+    await storeExportFromFile(pdfKey, localPdf, "application/pdf");
+
+    const attachmentKeys: string[] = [];
+    for (const file of attachments.files) {
+      const sanitized = sanitizeAttachmentFilename(basename(file.path));
+      const key = gmailAttachmentKey(account.id, messageId, sanitized);
+      await storeExportFromFile(key, file.path, "application/octet-stream");
+      attachmentKeys.push(key);
+    }
+
+    await storeGmailExportManifest(account.id, messageId, {
+      pdfKey,
+      attachmentKeys,
+      skippedAttachments: attachments.skipped,
+      subject: content.subject,
+      from: content.from,
+      date: content.date,
+    });
+  }
+
   return {
-    filePath: filename,
+    filePath: localPdf,
     attachmentFiles: attachments.files.map((file) => file.path),
     skippedAttachments: attachments.skipped,
     subject: content.subject,
     from: content.from,
     date: content.date,
+    cached: false,
   };
 }

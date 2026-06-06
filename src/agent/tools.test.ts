@@ -1101,7 +1101,7 @@ describe("select_trip", () => {
 describe("export_itinerary", () => {
   it("generates a PDF and records the file on the context", async () => {
     m.getTrip.mockResolvedValueOnce({ id: 7, title: "Alps" });
-    m.exportItineraryPdf.mockResolvedValueOnce("/tmp/alps-7.pdf");
+    m.exportItineraryPdf.mockResolvedValueOnce({ path: "/tmp/alps-7.pdf", cached: false });
     const c = ctx(7);
     const result = await toolHandlers.export_itinerary(c, { format: "pdf" });
     expect(c.exports).toEqual(["/tmp/alps-7.pdf"]);
@@ -1110,7 +1110,7 @@ describe("export_itinerary", () => {
 
   it("uses CSV when requested", async () => {
     m.getTrip.mockResolvedValueOnce({ id: 7, title: "Alps" });
-    m.exportItineraryCsv.mockResolvedValueOnce("/tmp/alps-7.csv");
+    m.exportItineraryCsv.mockResolvedValueOnce({ path: "/tmp/alps-7.csv", cached: true });
     const c = ctx(7);
     await toolHandlers.export_itinerary(c, { format: "csv" });
     expect(m.exportItineraryCsv).toHaveBeenCalled();
@@ -1385,6 +1385,7 @@ describe("export_gmail_message", () => {
       subject: "Hotel booking",
       from: "hotel@example.com",
       date: "Mon, 2 Jun 2026 10:00:00 +0000",
+      cached: false,
     });
 
     const c = ctx(7);
@@ -1396,6 +1397,7 @@ describe("export_gmail_message", () => {
     expect(m.exportGmailMessageToPdf).toHaveBeenCalledWith(
       expect.objectContaining({ googleEmail: "work@gmail.com" }),
       "msg-1",
+      { forceRefresh: false },
     );
     expect(c.exports).toEqual([
       "/tmp/hotel-booking-msg1.pdf",

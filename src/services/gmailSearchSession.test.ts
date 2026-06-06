@@ -83,6 +83,7 @@ describe("gmailSearchSession", () => {
       subject: "Hotel B",
       from: "hotel@example.com",
       date: null,
+      cached: false,
     });
 
     const result = await exportGmailBySearchIndex(111, 2);
@@ -97,6 +98,44 @@ describe("gmailSearchSession", () => {
     expect(mocks.exportGmailMessageToPdf).toHaveBeenCalledWith(
       { id: 2, status: "active" },
       "msg-2",
+      { forceRefresh: undefined },
+    );
+  });
+
+  it("passes forceRefresh when requested", async () => {
+    saveGmailSearchSession(111, {
+      accounts_searched: ["work@gmail.com"],
+      query_used: "Paris hotel",
+      messages: [
+        {
+          gmail_account_id: 2,
+          account_email: "work@gmail.com",
+          id: "msg-1",
+          thread_id: "t1",
+          subject: "Hotel A",
+          from: "hotel@example.com",
+          date: null,
+          snippet: "confirmed",
+        },
+      ],
+    });
+
+    mocks.getAccountById.mockResolvedValue({ id: 2, status: "active" });
+    mocks.exportGmailMessageToPdf.mockResolvedValue({
+      filePath: "/tmp/hotel-a.pdf",
+      attachmentFiles: [],
+      skippedAttachments: [],
+      subject: "Hotel A",
+      from: "hotel@example.com",
+      date: null,
+      cached: false,
+    });
+
+    await exportGmailBySearchIndex(111, 1, { forceRefresh: true });
+    expect(mocks.exportGmailMessageToPdf).toHaveBeenCalledWith(
+      { id: 2, status: "active" },
+      "msg-1",
+      { forceRefresh: true },
     );
   });
 

@@ -716,10 +716,16 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "export_itinerary",
       description:
-        "Generate an itinerary file and attach it to the chat. Use format 'pdf' or 'csv'.",
+        "Generate an itinerary file and attach it to the chat. Use format 'pdf' or 'csv'. Itinerary exports are cached while plan data is unchanged; pass force_refresh when the user asks to regenerate explicitly.",
       parameters: {
         type: "object",
-        properties: { format: { type: "string", enum: ["pdf", "csv"] } },
+        properties: {
+          format: { type: "string", enum: ["pdf", "csv"] },
+          force_refresh: {
+            type: "boolean",
+            description: "Regenerate even if a cached export exists.",
+          },
+        },
         required: ["format"],
       },
     },
@@ -811,7 +817,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "export_gmail_message",
       description:
-        "Export a Gmail message to a PDF file (renders HTML with inline images) and send separate file attachments from the email. Use when the user asks to read, show, open, or export a specific email found via search_gmail. Requires gmail_account_id and message_id from search results.",
+        "Export a Gmail message to a PDF file (renders HTML with inline images) and send separate file attachments from the email. Use when the user asks to read, show, open, or export a specific email found via search_gmail. Requires gmail_account_id and message_id from search results. Cached exports are reused unless force_refresh is true.",
       parameters: {
         type: "object",
         properties: {
@@ -822,6 +828,10 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           message_id: {
             type: "string",
             description: "Gmail message id from search_gmail results.",
+          },
+          force_refresh: {
+            type: "boolean",
+            description: "Re-fetch from Gmail and regenerate even if a cached export exists.",
           },
         },
         required: ["gmail_account_id", "message_id"],
@@ -1507,10 +1517,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const trip = await getTrip(ctx.telegramId, tripId);
     if (!trip) throw new Error("Active trip not found.");
     const format = String(args.format) === "csv" ? "csv" : "pdf";
-    const path =
-      format === "csv" ? await exportItineraryCsv(trip) : await exportItineraryPdf(trip);
-    ctx.exports.push(path);
-    return { ok: true, format, file: path };
+    const forceRefresh = Boolean(args.force_refresh);
+    const exported =
+      format === "csv"
+        ? await exportItineraryCsv(trip, { forceRefresh })
+        : await exportItineraryPdf(trip, { forceRefresh });
+    ctx.exports.push(exported.path);
+    return { ok: true, format, file: exported.path, cached: exported.cached };
   },
 
   async start_gmail_connect(ctx) {
@@ -1703,7 +1716,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
       throw new Error("message_id is required.");
     }
 
-    const exported = await exportGmailMessageToPdf(account, messageId);
+    const exported = await exportGmailMessageToPdf(account, messageId, {
+      forceRefresh: Boolean(args.force_refresh),
+    });
     ctx.exports.push(exported.filePath, ...exported.attachmentFiles);
 
     return {
@@ -1716,6 +1731,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       file: exported.filePath,
       attachment_files: exported.attachmentFiles,
       skipped_attachments: exported.skippedAttachments,
+      cached: exported.cached,
       instruction: buildGmailExportInstruction(
         exported.skippedAttachments,
         exported.attachmentFiles.length,

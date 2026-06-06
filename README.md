@@ -17,7 +17,7 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
                       +-->  OpenAI API (chat + embeddings)
                       +-->  Google Places API (optional place enrichment)
                       +-->  Gmail API via OAuth (optional per-user email search)
-                      +-->  ./data/exports (PDF / CSV)
+                      +-->  S3 bucket (optional cached exports) or ./data/exports (local fallback)
                       +-->  HTTPS /trip-planner/oauth/* (optional OAuth callback)
 ```
 
@@ -31,7 +31,25 @@ Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
 - Export: generate PDF and CSV of an itinerary, delivered as Telegram documents.
 - Gmail (optional): connect one or more Gmail inboxes, search trip/booking emails, export a message as PDF on request.
 
-Deferred (not in MVP): KML export, web search, auto-booking, Redis cache/jobs.
+Deferred (not in MVP): KML export, web search, auto-booking.
+
+## Export storage (optional S3)
+
+When `S3_BUCKET` and `AWS_REGION` are set, generated files (itinerary PDF/CSV, Gmail PDF exports with attachments, route comparison map PNGs) are stored in S3 and reused as a cache. Itinerary exports auto-regenerate when trip/itinerary/places data changes; Gmail and route-map exports are keyed by message or route identity. Users can force a refresh via the agent (`force_refresh`) or with phrases like "обнови письмо 2".
+
+When S3 is not configured, exports are written under `DATA_DIR` (default `./data/exports`) with no cross-request caching.
+
+Retention (S3 only): objects older than 30 days are deleted, then if the bucket still exceeds 4 GB the oldest objects are evicted until under the cap. Tune with `EXPORT_CACHE_MAX_AGE_DAYS`, `EXPORT_BUCKET_MAX_BYTES`, and `EXPORT_RETENTION_INTERVAL_MS`.
+
+Minimal IAM policy for the export bucket:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+  "Resource": ["arn:aws:s3:::YOUR_BUCKET", "arn:aws:s3:::YOUR_BUCKET/*"]
+}
+```
 
 ## Requirements
 
@@ -121,8 +139,9 @@ Tests are colocated as `src/**/*.test.ts` and are excluded from the production `
 ## Persistence
 
 PostgreSQL data is bind-mounted to `./data/postgres`, so `docker compose down` and container
-recreation never wipe the database. Generated exports live in `./data/exports`. The whole
-`data/` directory is gitignored.
+recreation never wipe the database. When S3 is configured, generated exports are stored in the
+bucket; otherwise they are written under `./data/exports` (also used as a temp staging area).
+The whole `data/` directory is gitignored.
 
 ## Deployment (Debian server)
 
