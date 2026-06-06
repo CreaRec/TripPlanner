@@ -220,15 +220,19 @@ describe("text handler", () => {
   it("exports gmail by number without calling the agent", async () => {
     vi.mocked(exportGmailBySearchIndex).mockResolvedValueOnce({
       ok: true,
-      filePath: "/tmp/hotel-b-msg2.pdf",
+      filePaths: ["/tmp/hotel-b-msg2.pdf", "/tmp/hotel-b-ticket.pdf"],
       subject: "Hotel B",
       index: 2,
+      attachmentCount: 1,
+      skippedAttachments: [{ filename: "large.zip", size: 11_000_000, reason: "too_large" }],
     });
     const ctx = fakeCtx({ message: { text: "Дай письмо 2" } });
     await handler("text")(ctx);
     expect(exportGmailBySearchIndex).toHaveBeenCalledWith(111, 2);
     expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-msg2.pdf" });
+    expect(ctx.replyWithDocument).toHaveBeenCalledWith({ source: "/tmp/hotel-b-ticket.pdf" });
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("PDF"));
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("large.zip"));
     expect(f.runAgent).not.toHaveBeenCalled();
   });
 

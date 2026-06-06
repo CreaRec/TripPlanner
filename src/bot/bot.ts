@@ -9,6 +9,7 @@ import {
   isConnectGmailRequest,
   parseExportGmailByNumberRequest,
 } from "../services/gmailIntents";
+import { formatGmailExportSuccessMessage } from "../services/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmailSearchSession";
 
 async function sendAgentResult(
@@ -76,17 +77,31 @@ async function replyDirectGmailExport(
     return true;
   }
 
-  try {
-    await ctx.replyWithDocument({ source: result.filePath });
-  } catch (err) {
-    console.error("[bot] failed to send exported gmail file:", result.filePath, err);
-    await ctx.reply("Не удалось прикрепить файл. Попробуйте ещё раз.");
+  let failedFiles = 0;
+  for (const filePath of result.filePaths) {
+    try {
+      await ctx.replyWithDocument({ source: filePath });
+    } catch (err) {
+      failedFiles += 1;
+      console.error("[bot] failed to send exported gmail file:", filePath, err);
+    }
+  }
+
+  if (failedFiles === result.filePaths.length) {
+    await ctx.reply("Не удалось прикрепить файлы. Попробуйте ещё раз.");
     return true;
   }
 
-  await ctx.reply(
-    `Готово — PDF письма ${result.index} прикреплён. Можно открыть прямо в Telegram или в любом PDF-просмотрщике.`,
-  );
+  let reply = formatGmailExportSuccessMessage({
+    index: result.index,
+    attachmentCount: result.attachmentCount,
+    skippedAttachments: result.skippedAttachments,
+  });
+  if (failedFiles > 0) {
+    reply = `${reply}\n\nНе удалось прикрепить часть файлов.`;
+  }
+
+  await ctx.reply(reply);
   return true;
 }
 

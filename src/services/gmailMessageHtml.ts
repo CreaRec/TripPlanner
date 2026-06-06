@@ -1,4 +1,5 @@
 import { decodeBase64Url, type GmailMessagePart } from "./gmailClient";
+import { partHeader, walkGmailParts } from "./gmailMime";
 
 export type { GmailMessagePart };
 
@@ -9,26 +10,10 @@ export interface GmailMessageHtmlInput {
   payload: GmailMessagePart | null | undefined;
 }
 
-function partHeader(
-  headers: { name?: string | null; value?: string | null }[] | undefined,
-  name: string,
-): string {
-  const found = headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase());
-  return found?.value?.trim() ?? "";
-}
-
 function decodePartBody(part: GmailMessagePart): string {
   const data = part.body?.data;
   if (!data) return "";
   return decodeBase64Url(data).toString("utf8");
-}
-
-function walkParts(part: GmailMessagePart | null | undefined, visit: (part: GmailMessagePart) => void): void {
-  if (!part) return;
-  visit(part);
-  for (const child of part.parts ?? []) {
-    walkParts(child, visit);
-  }
 }
 
 function normalizeContentId(value: string): string {
@@ -37,7 +22,7 @@ function normalizeContentId(value: string): string {
 
 function buildInlineImageMap(payload: GmailMessagePart | null | undefined): Map<string, string> {
   const map = new Map<string, string>();
-  walkParts(payload, (part) => {
+  walkGmailParts(payload, (part) => {
     const mimeType = part.mimeType?.toLowerCase() ?? "";
     if (!mimeType.startsWith("image/")) return;
     const contentId = partHeader(part.headers ?? undefined, "Content-ID");
@@ -68,7 +53,7 @@ function escapeHtml(value: string): string {
 function collectBodies(payload: GmailMessagePart | null | undefined): { html: string[]; plain: string[] } {
   const html: string[] = [];
   const plain: string[] = [];
-  walkParts(payload, (part) => {
+  walkGmailParts(payload, (part) => {
     const mimeType = part.mimeType?.toLowerCase() ?? "";
     if (mimeType === "text/html") {
       const body = decodePartBody(part);

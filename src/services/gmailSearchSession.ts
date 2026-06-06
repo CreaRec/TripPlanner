@@ -47,7 +47,14 @@ export function formatGmailSearchSessionContext(data: GmailSearchOutput): string
 }
 
 export type ExportGmailBySearchIndexResult =
-  | { ok: true; filePath: string; subject: string; index: number }
+  | {
+      ok: true;
+      filePaths: string[];
+      subject: string;
+      index: number;
+      attachmentCount: number;
+      skippedAttachments: { filename: string; size: number; reason: "too_large" }[];
+    }
   | { ok: false; reason: "no_session" }
   | { ok: false; reason: "invalid_index"; count: number }
   | { ok: false; reason: "account_unavailable" }
@@ -74,7 +81,14 @@ export async function exportGmailBySearchIndex(
 
   try {
     const exported = await exportGmailMessageToPdf(account, message.id);
-    return { ok: true, filePath: exported.filePath, subject: exported.subject, index };
+    return {
+      ok: true,
+      filePaths: [exported.filePath, ...exported.attachmentFiles],
+      subject: exported.subject,
+      index,
+      attachmentCount: exported.attachmentFiles.length,
+      skippedAttachments: exported.skippedAttachments,
+    };
   } catch (err) {
     const messageText = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: "export_failed", message: messageText };

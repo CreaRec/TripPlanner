@@ -58,7 +58,7 @@ Deferred (not in MVP): KML export, web search, auto-booking, Redis cache/jobs.
 
 While the OAuth app is in **Testing**, add each Google account email under **Test users** in Google Cloud.
 
-Email export renders the message HTML to PDF via system Chromium. On the server install `chromium` (Debian: `sudo apt install chromium`) and set `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` if needed. Separate file attachments (non-inline) are not included in the PDF; remote images require outbound network during render.
+Email export renders the message HTML to PDF via system Chromium and also sends separate file attachments to Telegram (inline images stay in the PDF only). Attachments larger than 10 MB are skipped with a notice to open them in Gmail. On the server install `chromium` (Debian: `sudo apt install chromium`) and set `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` if needed. Remote images in the email body require outbound network during render.
 
 Smoke test on the server:
 

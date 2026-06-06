@@ -102,6 +102,33 @@ function headerValue(
   return found?.value?.trim() ?? "";
 }
 
+export async function fetchGmailAttachment(
+  account: GmailAccount,
+  messageId: string,
+  attachmentId: string,
+): Promise<Buffer> {
+  const gmail = await createAuthenticatedGmail(account);
+  let response;
+  try {
+    response = await gmail.users.messages.attachments.get({
+      userId: "me",
+      messageId,
+      id: attachmentId,
+    });
+  } catch (err) {
+    if (isInvalidGrantError(err)) {
+      await markAccountInvalid(account.id);
+    }
+    throw err;
+  }
+
+  const data = response.data.data;
+  if (!data) {
+    throw new Error(`Gmail attachment ${attachmentId} returned no data.`);
+  }
+  return decodeBase64Url(data);
+}
+
 export async function fetchGmailMessageContent(
   account: GmailAccount,
   messageId: string,

@@ -28,7 +28,8 @@ describe("SYSTEM_PROMPT", () => {
     expect(SYSTEM_PROMPT).toContain("search_gmail");
     expect(SYSTEM_PROMPT).toContain("export_gmail_message");
     expect(SYSTEM_PROMPT).toContain("do not search again");
-    expect(SYSTEM_PROMPT).toContain("PDF file is attached");
+    expect(SYSTEM_PROMPT).toContain("PDF and any separate attachments are attached");
+    expect(SYSTEM_PROMPT).toContain("10 MB");
     expect(SYSTEM_PROMPT).toContain("Always search all connected accounts");
     expect(SYSTEM_PROMPT).toContain("Do not include Gmail links");
     expect(SYSTEM_PROMPT).toContain("подключить почту");

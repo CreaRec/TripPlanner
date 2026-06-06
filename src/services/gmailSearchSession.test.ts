@@ -78,6 +78,8 @@ describe("gmailSearchSession", () => {
     mocks.getAccountById.mockResolvedValue({ id: 2, status: "active" });
     mocks.exportGmailMessageToPdf.mockResolvedValue({
       filePath: "/tmp/hotel-b-msg2.pdf",
+      attachmentFiles: ["/tmp/hotel-b-ticket.pdf"],
+      skippedAttachments: [],
       subject: "Hotel B",
       from: "hotel@example.com",
       date: null,
@@ -86,9 +88,11 @@ describe("gmailSearchSession", () => {
     const result = await exportGmailBySearchIndex(111, 2);
     expect(result).toEqual({
       ok: true,
-      filePath: "/tmp/hotel-b-msg2.pdf",
+      filePaths: ["/tmp/hotel-b-msg2.pdf", "/tmp/hotel-b-ticket.pdf"],
       subject: "Hotel B",
       index: 2,
+      attachmentCount: 1,
+      skippedAttachments: [],
     });
     expect(mocks.exportGmailMessageToPdf).toHaveBeenCalledWith(
       { id: 2, status: "active" },

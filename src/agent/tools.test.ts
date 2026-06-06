@@ -131,7 +131,13 @@ vi.mock("../services/gmailAccounts", () => ({
 vi.mock("../services/gmailSearchQuery", () => ({ buildGmailSearchQuery: m.buildGmailSearchQuery }));
 vi.mock("../services/gmailSearch", () => ({ searchGmailAccounts: m.searchGmailAccounts }));
 vi.mock("../services/gmailSearchSession", () => ({ saveGmailSearchSession: m.saveGmailSearchSession }));
-vi.mock("../services/gmailExport", () => ({ exportGmailMessageToPdf: m.exportGmailMessageToPdf }));
+vi.mock("../services/gmailExport", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/gmailExport")>();
+  return {
+    ...actual,
+    exportGmailMessageToPdf: m.exportGmailMessageToPdf,
+  };
+});
 vi.mock("../config", () => ({ isGmailOAuthConfigured: m.isGmailOAuthConfigured }));
 vi.mock("../http/server", () => ({ startConnectFlow: m.startConnectFlow }));
 
@@ -1374,6 +1380,8 @@ describe("export_gmail_message", () => {
     });
     m.exportGmailMessageToPdf.mockResolvedValueOnce({
       filePath: "/tmp/hotel-booking-msg1.pdf",
+      attachmentFiles: ["/tmp/hotel-booking-ticket.pdf"],
+      skippedAttachments: [],
       subject: "Hotel booking",
       from: "hotel@example.com",
       date: "Mon, 2 Jun 2026 10:00:00 +0000",
@@ -1389,13 +1397,18 @@ describe("export_gmail_message", () => {
       expect.objectContaining({ googleEmail: "work@gmail.com" }),
       "msg-1",
     );
-    expect(c.exports).toEqual(["/tmp/hotel-booking-msg1.pdf"]);
+    expect(c.exports).toEqual([
+      "/tmp/hotel-booking-msg1.pdf",
+      "/tmp/hotel-booking-ticket.pdf",
+    ]);
     expect(result).toMatchObject({
       ok: true,
       account_email: "work@gmail.com",
       subject: "Hotel booking",
       format: "pdf",
       file: "/tmp/hotel-booking-msg1.pdf",
+      attachment_files: ["/tmp/hotel-booking-ticket.pdf"],
+      skipped_attachments: [],
     });
   });
 });
