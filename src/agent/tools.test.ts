@@ -20,6 +20,7 @@ const m = vi.hoisted(() => ({
   replaceMemory: vi.fn(),
   saveMemory: vi.fn(),
   searchMemories: vi.fn(),
+  listMemories: vi.fn(),
   addReservation: vi.fn(),
   deleteReservation: vi.fn(),
   listReservations: vi.fn(),
@@ -85,6 +86,7 @@ vi.mock("../services/itinerary", () => ({
 }));
 vi.mock("../services/memories", () => ({
   deleteMemory: m.deleteMemory,
+  listMemories: m.listMemories,
   replaceMemory: m.replaceMemory,
   saveMemory: m.saveMemory,
   searchMemories: m.searchMemories,
@@ -215,6 +217,7 @@ describe("toolDefinitions", () => {
         "clear_day",
         "delete_day",
         "get_itinerary",
+        "get_trip_summary",
         "save_memory",
         "search_memory",
         "replace_memory",
@@ -894,6 +897,60 @@ describe("requireTrip-guarded tools", () => {
         start_at: "2026-07-01T15:00:00.000Z",
       }),
     ]);
+  });
+
+  it("get_trip_summary returns formatted card overview", async () => {
+    m.getTrip.mockResolvedValueOnce({
+      id: 7,
+      title: "Seattle",
+      destination: "Seattle",
+      startDate: new Date("2026-07-13T00:00:00.000Z"),
+      endDate: new Date("2026-07-20T00:00:00.000Z"),
+      travelers: "Rimma",
+      summary: null,
+    });
+    m.getItinerary.mockResolvedValueOnce([
+      {
+        id: 1,
+        dayNumber: 1,
+        date: new Date("2026-07-13T00:00:00.000Z"),
+        title: "Arrival",
+        summary: null,
+        items: [],
+      },
+    ]);
+    m.listReservations.mockResolvedValueOnce([
+      {
+        id: 1,
+        type: "flight",
+        title: "AUS → SEA",
+        provider: "Alaska AS 215",
+        confirmationNumber: "FLFLOD",
+        startAt: new Date("2026-07-13T14:00:00.000Z"),
+        endAt: null,
+        address: null,
+        status: "booked",
+        notes: null,
+        metadata: { seat: "17B" },
+      },
+    ]);
+    m.listMemories.mockResolvedValueOnce([]);
+
+    const result = await toolHandlers.get_trip_summary(ctx(7), { format: "card", locale: "ru" });
+    expect(result).toEqual(
+      expect.objectContaining({
+        format: "card",
+        locale: "ru",
+        text: expect.stringMatching(/✈️ Транспорт[\s\S]*Alaska AS 215/),
+        instruction: expect.stringContaining("exactly"),
+      }),
+    );
+  });
+
+  it("get_trip_summary throws when there is no active trip", async () => {
+    await expect(toolHandlers.get_trip_summary(ctx(null), { format: "card" })).rejects.toThrow(
+      /active trip/i,
+    );
   });
 
   it("list_places returns enrichment fields", async () => {

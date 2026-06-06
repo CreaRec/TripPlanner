@@ -17,7 +17,9 @@ import {
   updateItem,
   upsertDay,
 } from "../services/itinerary";
-import { deleteMemory, replaceMemory, saveMemory, searchMemories } from "../services/memories";
+import { deleteMemory, listMemories, replaceMemory, saveMemory, searchMemories } from "../services/memories";
+import { formatTripSummary } from "../services/tripSummaryFormat";
+import type { TripSummaryFormat, TripSummaryLocale } from "../services/tripSummaryFormat";
 import {
   addReservation,
   deleteReservation,
@@ -656,6 +658,30 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: "get_itinerary",
       description: "Get the full day-by-day itinerary for the active trip.",
       parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_trip_summary",
+      description:
+        "Return a formatted trip overview for the active trip. Use format 'card' for a compact overview with icon sections (dates, transport, hotel, plan, notes), or 'by_day' for a day-by-day view. Call this when the user asks for a trip summary, overview, status, or what is planned.",
+      parameters: {
+        type: "object",
+        properties: {
+          format: {
+            type: "string",
+            enum: ["card", "by_day"],
+            description: "card = compact overview with icon blocks; by_day = day-by-day breakdown.",
+          },
+          locale: {
+            type: "string",
+            enum: ["en", "ru"],
+            description: "Language for section labels and dates. Match the user's language.",
+          },
+        },
+        required: ["format"],
+      },
     },
   },
   {
@@ -1500,6 +1526,34 @@ export const toolHandlers: Record<string, ToolHandler> = {
         is_backup: i.isBackup,
       })),
     }));
+  },
+
+  async get_trip_summary(ctx, args) {
+    const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+    const format = String(args.format) === "by_day" ? "by_day" : "card";
+    const locale: TripSummaryLocale = args.locale === "ru" ? "ru" : "en";
+    const [itinerary, reservations, memories] = await Promise.all([
+      getItinerary(tripId),
+      listReservations(tripId),
+      listMemories(ctx.telegramId, tripId),
+    ]);
+    const text = formatTripSummary({
+      trip,
+      itinerary,
+      reservations,
+      memories: memories.slice(0, 5),
+      format: format as TripSummaryFormat,
+      locale,
+    });
+    return {
+      format,
+      locale,
+      text,
+      instruction:
+        "Reply with the text field exactly as returned. Do not rephrase, add a duplicate heading, or convert it into a different layout.",
+    };
   },
 
   async save_memory(ctx, args) {
