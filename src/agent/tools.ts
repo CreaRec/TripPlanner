@@ -268,7 +268,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "delete_trip",
       description:
-        "Delete a trip and its related places, itinerary, reservations, and plan versions. Only call after the user explicitly confirms deletion.",
+        "Delete a trip and its related places, itinerary, and reservations. Only call after the user explicitly confirms deletion.",
       parameters: {
         type: "object",
         properties: {
