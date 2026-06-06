@@ -6,7 +6,6 @@ const m = vi.hoisted(() => ({
   getTrip: vi.fn(),
   listTrips: vi.fn(),
   updateTrip: vi.fn(),
-  addPlace: vi.fn(),
   deletePlace: vi.fn(),
   listPlaces: vi.fn(),
   updatePlace: vi.fn(),
@@ -29,9 +28,11 @@ const m = vi.hoisted(() => ({
   exportItineraryPdf: vi.fn(),
   searchPlaceDetails: vi.fn(),
   enrichPlace: vi.fn(),
+  saveTripPlace: vi.fn(),
   deleteSavedPlace: vi.fn(),
   listSavedPlaces: vi.fn(),
   saveInterestingPlace: vi.fn(),
+  enrichSavedPlace: vi.fn(),
   updateSavedPlace: vi.fn(),
   suggestSavedPlacesOnRoute: vi.fn(),
   generateRouteComparisonMap: vi.fn(),
@@ -68,7 +69,6 @@ vi.mock("../services/places", () => ({
     "tour",
     "other",
   ],
-  addPlace: m.addPlace,
   deletePlace: m.deletePlace,
   listPlaces: m.listPlaces,
   updatePlace: m.updatePlace,
@@ -102,12 +102,14 @@ vi.mock("../services/export", () => ({
 vi.mock("../services/placeEnrichment", () => ({
   searchPlaceDetails: m.searchPlaceDetails,
   enrichPlace: m.enrichPlace,
+  saveTripPlace: m.saveTripPlace,
 }));
 vi.mock("../services/savedPlaces", () => ({
   SAVED_PLACE_STATUSES: ["want_to_visit", "visited", "archived"],
   deleteSavedPlace: m.deleteSavedPlace,
   listSavedPlaces: m.listSavedPlaces,
   saveInterestingPlace: m.saveInterestingPlace,
+  enrichSavedPlace: m.enrichSavedPlace,
   updateSavedPlace: m.updateSavedPlace,
 }));
 vi.mock("../services/googleRoutes", () => ({
@@ -194,6 +196,7 @@ describe("toolDefinitions", () => {
         "list_places",
         "search_place_details",
         "enrich_place",
+        "enrich_interesting_place",
         "update_place",
         "delete_place",
         "save_interesting_place",
@@ -256,13 +259,16 @@ describe("toolDefinitions", () => {
     expect((updateInterestingPlace.parameters as any).properties.status.enum).toContain("visited");
   });
 
-  it("instructs the agent to pass search results into enrich_place for existing places", () => {
+  it("instructs the agent to pass search results into enrichment tools for existing places", () => {
     const searchPlace = toolFunction("search_place_details");
     const enrichPlace = toolFunction("enrich_place");
+    const enrichInterestingPlace = toolFunction("enrich_interesting_place");
 
-    expect(searchPlace.description).toContain("pass the selected external_id to enrich_place");
-    expect(enrichPlace.description).toContain("existing place_id");
-    expect(enrichPlace.description).toContain("external_id");
+    expect(searchPlace.description).toContain("enrich_place or enrich_interesting_place");
+    expect(enrichPlace.description).toContain("active trip");
+    expect(enrichPlace.description).toContain("place_id");
+    expect(enrichInterestingPlace.description).toContain("saved_place_id");
+    expect(enrichInterestingPlace.description).toContain("without an active trip");
   });
 
   it("tells the agent not to guess route endpoints", () => {
@@ -768,39 +774,70 @@ describe("requireTrip-guarded tools", () => {
     await expect(toolHandlers.add_place(ctx(null), { name: "x" })).rejects.toThrow(/No active trip/);
   });
 
-  it("add_place works with an active trip", async () => {
-    m.addPlace.mockResolvedValueOnce({ id: 5, name: "Lake" });
+  it("add_place works with an active trip and auto-enriches", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Utah" });
+    m.saveTripPlace.mockResolvedValueOnce({
+      created: true,
+      duplicatePlaceId: null,
+      place: { id: 5, name: "Lake" },
+      googlePlace: {
+        externalId: "g-lake",
+        name: "Lake",
+        category: "natural_attraction",
+        address: "Utah",
+        websiteUrl: null,
+        mapsUrl: "https://maps.google.com/?cid=lake",
+        phone: null,
+        bookingUrl: null,
+        ticketUrl: null,
+        reservationRecommended: false,
+        advice: null,
+      },
+    });
     const result = await toolHandlers.add_place(ctx(7), {
       name: "Lake",
       category: "natural_attraction",
       kid_friendly: true,
     });
-    expect(m.addPlace).toHaveBeenCalledWith(
+    expect(m.saveTripPlace).toHaveBeenCalledWith(
       expect.objectContaining({
         tripId: 7,
-        name: "Lake",
+        query: "Lake",
+        destination: "Utah",
         category: "natural_attraction",
         kidFriendly: true,
       }),
     );
-    expect(result).toMatchObject({ ok: true, place_id: 5 });
+    expect(result).toMatchObject({
+      ok: true,
+      created: true,
+      place_id: 5,
+      google_place: { maps_url: "https://maps.google.com/?cid=lake" },
+    });
   });
 
   it("add_place rejects unsupported categories", async () => {
-    m.addPlace.mockClear();
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Utah" });
+    m.saveTripPlace.mockClear();
     await expect(toolHandlers.add_place(ctx(7), { name: "Lake", category: "shopping" })).rejects.toThrow(
       /category must be one of/,
     );
-    expect(m.addPlace).not.toHaveBeenCalled();
+    expect(m.saveTripPlace).not.toHaveBeenCalled();
   });
 
   it("add_place normalizes a null category to other", async () => {
-    m.addPlace.mockResolvedValueOnce({ id: 6, name: "Stop" });
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Utah" });
+    m.saveTripPlace.mockResolvedValueOnce({
+      created: true,
+      duplicatePlaceId: null,
+      place: { id: 6, name: "Stop" },
+      googlePlace: null,
+    });
     await toolHandlers.add_place(ctx(7), { name: "Stop", category: null });
-    expect(m.addPlace).toHaveBeenCalledWith(
+    expect(m.saveTripPlace).toHaveBeenCalledWith(
       expect.objectContaining({
         tripId: 7,
-        name: "Stop",
+        query: "Stop",
         category: "other",
       }),
     );
@@ -958,6 +995,46 @@ describe("requireTrip-guarded tools", () => {
         maps_url: "https://maps.google.com/?cid=moki",
       }),
     ]);
+  });
+
+  it("enrich_interesting_place enriches a general saved place without an active trip", async () => {
+    const place = savedPlace({
+      websiteUrl: "https://example.com",
+      mapsUrl: "https://maps.google.com/?cid=view",
+      phone: "+1 555 0100",
+    });
+    m.enrichSavedPlace.mockResolvedValueOnce({
+      updated: true,
+      duplicateSavedPlaceId: null,
+      place,
+      googlePlace: {
+        externalId: "g-view",
+        name: "The View Restaurant",
+        category: "restaurant",
+        address: "Monument Valley",
+        websiteUrl: "https://example.com",
+        mapsUrl: "https://maps.google.com/?cid=view",
+        phone: "+1 555 0100",
+        bookingUrl: null,
+        ticketUrl: null,
+        reservationRecommended: false,
+        advice: null,
+      },
+    });
+
+    const result = await toolHandlers.enrich_interesting_place(ctx(null), { saved_place_id: 77 });
+
+    expect(m.enrichSavedPlace).toHaveBeenCalledWith({
+      telegramId: 111,
+      savedPlaceId: 77,
+      query: null,
+      externalId: null,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      saved_place_id: 77,
+      place: { maps_url: "https://maps.google.com/?cid=view" },
+    });
   });
 
   it("enrich_place enriches an existing saved place", async () => {
@@ -1219,7 +1296,7 @@ describe("start_gmail_connect", () => {
       "https://example.com/trip-planner/oauth/google/start?state=abc",
     );
 
-    const result = await toolHandlers.start_gmail_connect(ctx(7));
+    const result = await toolHandlers.start_gmail_connect(ctx(7), {});
 
     expect(m.startConnectFlow).toHaveBeenCalledWith(111);
     expect(result).toEqual(
@@ -1233,7 +1310,7 @@ describe("start_gmail_connect", () => {
   it("reports when oauth is not configured", async () => {
     m.isGmailOAuthConfigured.mockReturnValue(false);
 
-    const result = await toolHandlers.start_gmail_connect(ctx(7));
+    const result = await toolHandlers.start_gmail_connect(ctx(7), {});
 
     expect(m.startConnectFlow).not.toHaveBeenCalled();
     expect(result).toEqual(
@@ -1257,7 +1334,7 @@ describe("list_gmail_accounts", () => {
       },
     ]);
 
-    const result = await toolHandlers.list_gmail_accounts(ctx(7));
+    const result = await toolHandlers.list_gmail_accounts(ctx(7), {});
 
     expect(result).toMatchObject({
       ok: true,

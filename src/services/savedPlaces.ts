@@ -82,6 +82,20 @@ export interface SaveInterestingPlaceResult {
   created: boolean;
 }
 
+export interface EnrichSavedPlaceInput {
+  telegramId: number;
+  savedPlaceId: number;
+  query?: string | null;
+  externalId?: string | null;
+}
+
+export interface EnrichSavedPlaceResult {
+  place: SavedPlace | null;
+  googlePlace: GooglePlaceDetails | null;
+  updated: boolean;
+  duplicateSavedPlaceId: number | null;
+}
+
 function jsonOrDbNull(value: Prisma.InputJsonValue | null | undefined): Prisma.InputJsonValue | Prisma.NullTypes.DbNull {
   return value ?? Prisma.DbNull;
 }
@@ -291,4 +305,59 @@ export async function saveInterestingPlace(input: SaveInterestingPlaceInput): Pr
 
   const place = await addSavedPlace(inputFromGooglePlace(input.telegramId, googlePlace, input));
   return { place, googlePlace, created: true };
+}
+
+export async function enrichSavedPlace(input: EnrichSavedPlaceInput): Promise<EnrichSavedPlaceResult> {
+  const savedPlace = await getSavedPlace(input.telegramId, input.savedPlaceId);
+  if (!savedPlace) {
+    return { place: null, googlePlace: null, updated: false, duplicateSavedPlaceId: null };
+  }
+
+  const externalId =
+    input.externalId ??
+    savedPlace.externalId ??
+    (await searchGooglePlaces(input.query ?? savedPlace.name, {
+      maxResults: 1,
+    }))[0]?.externalId;
+
+  if (!externalId) {
+    return { place: savedPlace, googlePlace: null, updated: false, duplicateSavedPlaceId: null };
+  }
+
+  const googlePlace = await getGooglePlaceDetails(externalId);
+  const duplicate = await findSavedPlaceByExternalId(
+    input.telegramId,
+    googlePlace.provider,
+    googlePlace.externalId,
+  );
+  if (duplicate && duplicate.id !== savedPlace.id) {
+    return { place: duplicate, googlePlace, updated: false, duplicateSavedPlaceId: duplicate.id };
+  }
+
+  const updatedPlace = await updateSavedPlace(input.telegramId, savedPlace.id, {
+    name: googlePlace.name,
+    category: categoryForUpdate(savedPlace, googlePlace),
+    address: googlePlace.address,
+    latitude: googlePlace.latitude,
+    longitude: googlePlace.longitude,
+    externalProvider: googlePlace.provider,
+    externalId: googlePlace.externalId,
+    websiteUrl: googlePlace.websiteUrl,
+    mapsUrl: googlePlace.mapsUrl,
+    phone: googlePlace.phone,
+    bookingUrl: googlePlace.bookingUrl,
+    ticketUrl: googlePlace.ticketUrl,
+    reservationRecommended: googlePlace.reservationRecommended,
+    openingHours: googlePlace.openingHours === null ? null : (googlePlace.openingHours as object),
+    rating: googlePlace.rating,
+    priceLevel: googlePlace.priceLevel,
+    notes: mergeAdviceIntoNotes(savedPlace.notes, googlePlace.advice),
+  });
+
+  return {
+    place: updatedPlace,
+    googlePlace,
+    updated: Boolean(updatedPlace),
+    duplicateSavedPlaceId: null,
+  };
 }

@@ -27,7 +27,7 @@ vi.mock("./googlePlaces", () => ({
   getGooglePlaceDetails: m.getGooglePlaceDetails,
 }));
 
-import { saveInterestingPlace } from "./savedPlaces";
+import { enrichSavedPlace, saveInterestingPlace } from "./savedPlaces";
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -129,5 +129,57 @@ describe("savedPlaces", () => {
       }),
     );
     expect(result).toMatchObject({ created: false, place: { id: 5 } });
+  });
+
+  it("enriches an existing saved place with Google details", async () => {
+    const existing = row({ id: 5, name: "The View Restaurant", notes: null });
+    const updated = row({
+      id: 5,
+      name: "The View Restaurant",
+      websiteUrl: "https://example.com",
+      mapsUrl: "https://maps.google.com/?cid=view",
+      phone: "+1 555 0100",
+      rating: 4.5,
+    });
+    m.getGooglePlaceDetails.mockResolvedValueOnce({
+      provider: "google_places",
+      externalId: "g-view",
+      name: "The View Restaurant",
+      category: "restaurant",
+      address: "Monument Valley",
+      latitude: 36.98,
+      longitude: -110.11,
+      websiteUrl: "https://example.com",
+      mapsUrl: "https://maps.google.com/?cid=view",
+      phone: "+1 555 0100",
+      openingHours: null,
+      rating: 4.5,
+      priceLevel: 2,
+      reservationRecommended: false,
+      bookingUrl: null,
+      ticketUrl: null,
+      advice: null,
+      types: ["restaurant"],
+    });
+    m.findFirst
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    m.searchGooglePlaces.mockResolvedValueOnce([{ externalId: "g-view" }]);
+    m.update.mockResolvedValueOnce(updated);
+
+    const result = await enrichSavedPlace({ telegramId: 111, savedPlaceId: 5 });
+
+    expect(m.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 5 },
+        data: expect.objectContaining({
+          websiteUrl: "https://example.com",
+          mapsUrl: "https://maps.google.com/?cid=view",
+          phone: "+1 555 0100",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({ updated: true, duplicateSavedPlaceId: null });
   });
 });

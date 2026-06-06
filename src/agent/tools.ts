@@ -3,7 +3,6 @@ import type OpenAI from "openai";
 import { createTrip, deleteTrip, getTrip, listTrips, updateTrip } from "../services/trips";
 import {
   PLACE_CATEGORIES,
-  addPlace,
   deletePlace,
   listPlaces,
   updatePlace,
@@ -28,10 +27,13 @@ import {
 import { exportItineraryCsv, exportItineraryPdf } from "../services/export";
 import {
   enrichPlace,
+  saveTripPlace,
   searchPlaceDetails,
 } from "../services/placeEnrichment";
+import type { GooglePlaceDetails } from "../services/googlePlaces";
 import {
   deleteSavedPlace,
+  enrichSavedPlace,
   listSavedPlaces,
   saveInterestingPlace,
   SAVED_PLACE_STATUSES,
@@ -283,11 +285,13 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "add_place",
-      description: "Save a point of interest to the active trip.",
+      description:
+        "Save a point of interest to the active trip. Automatically enriches the place with Google Places details when possible.",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string" },
+          name: { type: "string", description: "Place name or Google Places search query." },
+          external_id: { type: "string", description: "Google Places id if already known." },
           category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
           latitude: { type: "number" },
@@ -322,7 +326,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "search_place_details",
       description:
-        "Search Google Places for richer details about a place without saving anything. Works without an active trip; if an active trip exists, its destination is used as search context unless destination is provided. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place when updating an existing trip place.",
+        "Search Google Places for richer details about a place without saving anything. Works without an active trip; if an active trip exists, its destination is used as search context unless destination is provided. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place or enrich_interesting_place when updating an existing place.",
       parameters: {
         type: "object",
         properties: {
@@ -339,7 +343,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "enrich_place",
       description:
-        "Enrich an existing saved place with Google Places details: address, coordinates, links, hours/rating, and booking or ticket advice. If search_place_details returned one clear match for this saved place, call enrich_place with the existing place_id and that result's external_id.",
+        "Enrich an existing place in the active trip with Google Places details: address, coordinates, links, hours/rating, and booking or ticket advice. Requires an active trip. If search_place_details returned one clear match, call enrich_place with the existing place_id and that result's external_id.",
       parameters: {
         type: "object",
         properties: {
@@ -348,6 +352,23 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           external_id: { type: "string", description: "Google Places id from search_place_details." },
         },
         required: ["place_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "enrich_interesting_place",
+      description:
+        "Enrich an existing place in the user's general interesting places list with Google Places details. Works without an active trip. If search_place_details returned one clear match, call enrich_interesting_place with the saved_place_id and that result's external_id.",
+      parameters: {
+        type: "object",
+        properties: {
+          saved_place_id: { type: "integer" },
+          query: { type: "string", description: "Optional search query if the saved name is too vague." },
+          external_id: { type: "string", description: "Google Places id from search_place_details." },
+        },
+        required: ["saved_place_id"],
       },
     },
   },
@@ -868,6 +889,22 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   },
 ];
 
+function googlePlaceToToolResult(googlePlace: GooglePlaceDetails) {
+  return {
+    external_id: googlePlace.externalId,
+    name: googlePlace.name,
+    category: googlePlace.category,
+    address: googlePlace.address,
+    website_url: googlePlace.websiteUrl,
+    maps_url: googlePlace.mapsUrl,
+    phone: googlePlace.phone,
+    booking_url: googlePlace.bookingUrl,
+    ticket_url: googlePlace.ticketUrl,
+    reservation_recommended: googlePlace.reservationRecommended,
+    advice: googlePlace.advice,
+  };
+}
+
 function savedPlaceToToolResult(place: SavedPlace) {
   return {
     id: place.id,
@@ -995,28 +1032,31 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async add_place(ctx, args) {
     const tripId = requireTrip(ctx);
-    const place = await addPlace({
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+    const result = await saveTripPlace({
       tripId,
-      name: String(args.name),
+      query: String(args.name),
+      destination: trip.destination,
+      externalId: (args.external_id as string) ?? null,
       category:
         args.category !== undefined ? requirePlaceCategory(args.category, "category") : null,
       address: (args.address as string) ?? null,
       latitude: (args.latitude as number) ?? null,
       longitude: (args.longitude as number) ?? null,
-      websiteUrl: (args.website_url as string) ?? null,
-      mapsUrl: (args.maps_url as string) ?? null,
-      phone: (args.phone as string) ?? null,
-      bookingUrl: (args.booking_url as string) ?? null,
-      ticketUrl: (args.ticket_url as string) ?? null,
-      reservationRecommended: (args.reservation_recommended as boolean) ?? null,
-      rating: (args.rating as number) ?? null,
-      priceLevel: (args.price_level as number) ?? null,
       priority: (args.priority as number) ?? null,
       durationMin: (args.duration_min as number) ?? null,
       kidFriendly: (args.kid_friendly as boolean) ?? null,
       notes: (args.notes as string) ?? null,
     });
-    return { ok: true, place_id: place.id, name: place.name };
+    return {
+      ok: true,
+      created: result.created,
+      place_id: result.place.id,
+      name: result.place.name,
+      duplicate_place_id: result.duplicatePlaceId,
+      google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
+    };
   },
 
   async list_places(ctx) {
@@ -1079,21 +1119,23 @@ export const toolHandlers: Record<string, ToolHandler> = {
       ok: result.updated,
       place_id: result.place?.id ?? null,
       duplicate_place_id: result.duplicatePlaceId,
-      google_place: result.googlePlace
-        ? {
-            external_id: result.googlePlace.externalId,
-            name: result.googlePlace.name,
-            category: result.googlePlace.category,
-            address: result.googlePlace.address,
-            website_url: result.googlePlace.websiteUrl,
-            maps_url: result.googlePlace.mapsUrl,
-            phone: result.googlePlace.phone,
-            booking_url: result.googlePlace.bookingUrl,
-            ticket_url: result.googlePlace.ticketUrl,
-            reservation_recommended: result.googlePlace.reservationRecommended,
-            advice: result.googlePlace.advice,
-          }
-        : null,
+      google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
+    };
+  },
+
+  async enrich_interesting_place(ctx, args) {
+    const result = await enrichSavedPlace({
+      telegramId: ctx.telegramId,
+      savedPlaceId: requireInteger(args.saved_place_id, "saved_place_id"),
+      query: (args.query as string) ?? null,
+      externalId: (args.external_id as string) ?? null,
+    });
+    return {
+      ok: result.updated,
+      saved_place_id: result.place?.id ?? null,
+      duplicate_saved_place_id: result.duplicateSavedPlaceId,
+      place: result.place ? savedPlaceToToolResult(result.place) : null,
+      google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
     };
   },
 
@@ -1153,21 +1195,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       created: result.created,
       saved_place_id: result.place.id,
       place: savedPlaceToToolResult(result.place),
-      google_place: result.googlePlace
-        ? {
-            external_id: result.googlePlace.externalId,
-            name: result.googlePlace.name,
-            category: result.googlePlace.category,
-            address: result.googlePlace.address,
-            website_url: result.googlePlace.websiteUrl,
-            maps_url: result.googlePlace.mapsUrl,
-            phone: result.googlePlace.phone,
-            booking_url: result.googlePlace.bookingUrl,
-            ticket_url: result.googlePlace.ticketUrl,
-            reservation_recommended: result.googlePlace.reservationRecommended,
-            advice: result.googlePlace.advice,
-          }
-        : null,
+      google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
     };
   },
 
