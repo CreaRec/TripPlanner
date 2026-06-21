@@ -68,7 +68,9 @@ describe("savedPlaces", () => {
 
   it("saves a manual place when Google search has no match", async () => {
     m.searchGooglePlaces.mockResolvedValueOnce([]);
-    m.create.mockResolvedValueOnce(row({ name: "Mystery overlook", externalProvider: null, externalId: null }));
+    m.create.mockResolvedValueOnce(
+      row({ name: "Mystery overlook", address: null, externalProvider: null, externalId: null, mapsUrl: null, latitude: null, longitude: null }),
+    );
 
     const result = await saveInterestingPlace({
       telegramId: 111,
@@ -85,7 +87,12 @@ describe("savedPlaces", () => {
         }),
       }),
     );
-    expect(result).toMatchObject({ created: true, googlePlace: null });
+    expect(result).toMatchObject({
+      created: true,
+      googlePlace: null,
+      enriched: false,
+      missingFields: ["address", "maps_url", "coordinates"],
+    });
   });
 
   it("updates an existing Google-backed place instead of duplicating it", async () => {
@@ -128,7 +135,7 @@ describe("savedPlaces", () => {
         }),
       }),
     );
-    expect(result).toMatchObject({ created: false, place: { id: 5 } });
+    expect(result).toMatchObject({ created: false, place: { id: 5 }, enriched: true });
   });
 
   it("enriches an existing saved place with Google details", async () => {
@@ -180,6 +187,6 @@ describe("savedPlaces", () => {
         }),
       }),
     );
-    expect(result).toMatchObject({ updated: true, duplicateSavedPlaceId: null });
+    expect(result).toMatchObject({ updated: true, duplicateSavedPlaceId: null, enriched: true });
   });
 });

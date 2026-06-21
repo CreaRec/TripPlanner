@@ -7,6 +7,10 @@
 #
 # Runs the full test suite locally before syncing; deploy aborts if tests fail.
 #
+# Usage: ./scripts/deploy.sh [--remote]
+#
+#   --remote   Connect via crearec.app instead of the local network IP (192.168.1.135).
+#
 # Override any of these via environment variables:
 #   SERVER_HOST, SSH_USER, REMOTE_APP_DIR, SERVICE_NAME, SKIP_NGINX_WEB, DEPLOY_PASSWORD
 #
@@ -19,7 +23,28 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib.sh
 . scripts/lib.sh
 
-SERVER_HOST="${SERVER_HOST:-192.168.1.135}"
+USE_REMOTE=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --remote)
+      USE_REMOTE=true
+      shift
+      ;;
+    *)
+      err "Unknown argument: $1"
+      err "Usage: $0 [--remote]"
+      exit 1
+      ;;
+  esac
+done
+
+if [ "${SERVER_HOST+set}" = set ]; then
+  : # keep explicit SERVER_HOST from environment
+elif [ "$USE_REMOTE" = true ]; then
+  SERVER_HOST="crearec.app"
+else
+  SERVER_HOST="192.168.1.135"
+fi
 DEFAULT_SSH_USER="${SSH_USER:-crearec}"
 SSH_USER="${SSH_USER:-$DEFAULT_SSH_USER}"
 REMOTE_APP_DIR="${REMOTE_APP_DIR:-/home/crearec/crea-trip-planner}"

@@ -23,13 +23,17 @@ const m = vi.hoisted(() => ({
   listMemories: vi.fn(),
   addReservation: vi.fn(),
   deleteReservation: vi.fn(),
+  getReservation: vi.fn(),
   listReservations: vi.fn(),
   updateReservation: vi.fn(),
+  saveReservationWithEnrichment: vi.fn(),
+  updateReservationWithEnrichment: vi.fn(),
   exportItineraryCsv: vi.fn(),
   exportItineraryPdf: vi.fn(),
   searchPlaceDetails: vi.fn(),
   enrichPlace: vi.fn(),
   saveTripPlace: vi.fn(),
+  saveTripPlaceFromSaved: vi.fn(),
   deleteSavedPlace: vi.fn(),
   listSavedPlaces: vi.fn(),
   saveInterestingPlace: vi.fn(),
@@ -94,8 +98,13 @@ vi.mock("../services/memories", () => ({
 vi.mock("../services/reservations", () => ({
   addReservation: m.addReservation,
   deleteReservation: m.deleteReservation,
+  getReservation: m.getReservation,
   listReservations: m.listReservations,
   updateReservation: m.updateReservation,
+}));
+vi.mock("../services/reservationEnrichment", () => ({
+  saveReservationWithEnrichment: m.saveReservationWithEnrichment,
+  updateReservationWithEnrichment: m.updateReservationWithEnrichment,
 }));
 vi.mock("../services/export", () => ({
   exportItineraryCsv: m.exportItineraryCsv,
@@ -105,6 +114,7 @@ vi.mock("../services/placeEnrichment", () => ({
   searchPlaceDetails: m.searchPlaceDetails,
   enrichPlace: m.enrichPlace,
   saveTripPlace: m.saveTripPlace,
+  saveTripPlaceFromSaved: m.saveTripPlaceFromSaved,
 }));
 vi.mock("../services/savedPlaces", () => ({
   SAVED_PLACE_STATUSES: ["want_to_visit", "visited", "archived"],
@@ -262,16 +272,16 @@ describe("toolDefinitions", () => {
     expect((updateInterestingPlace.parameters as any).properties.status.enum).toContain("visited");
   });
 
-  it("instructs the agent to pass search results into enrichment tools for existing places", () => {
+  it("discourages search_place_details before save and enrichment tools for existing records", () => {
     const searchPlace = toolFunction("search_place_details");
     const enrichPlace = toolFunction("enrich_place");
     const enrichInterestingPlace = toolFunction("enrich_interesting_place");
+    const addPlace = toolFunction("add_place");
 
-    expect(searchPlace.description).toContain("enrich_place or enrich_interesting_place");
-    expect(enrichPlace.description).toContain("active trip");
-    expect(enrichPlace.description).toContain("place_id");
-    expect(enrichInterestingPlace.description).toContain("saved_place_id");
-    expect(enrichInterestingPlace.description).toContain("without an active trip");
+    expect(searchPlace.description).toContain("Do NOT use before add_place");
+    expect(enrichPlace.description).toContain("Do NOT use before add_place");
+    expect(enrichInterestingPlace.description).toContain("Do NOT use before save_interesting_place");
+    expect(addPlace.description).toContain("missing_fields");
   });
 
   it("tells the agent not to guess route endpoints", () => {
@@ -328,6 +338,8 @@ describe("general interesting places", () => {
         advice: "Check permits.",
       },
       created: true,
+      enriched: true,
+      missingFields: [],
     });
 
     const result = await toolHandlers.save_interesting_place(ctx(null), {
@@ -339,6 +351,7 @@ describe("general interesting places", () => {
       expect.objectContaining({
         telegramId: 111,
         query: "Crater Lake",
+        destination: null,
         status: "want_to_visit",
         sourceNote: "for a future Oregon road trip",
       }),
@@ -346,6 +359,8 @@ describe("general interesting places", () => {
     expect(result).toMatchObject({
       ok: true,
       created: true,
+      enriched: true,
+      missing_fields: [],
       saved_place_id: 77,
       place: { name: "Crater Lake", maps_url: "https://maps.google.com/?cid=crater" },
     });
@@ -782,6 +797,8 @@ describe("requireTrip-guarded tools", () => {
     m.saveTripPlace.mockResolvedValueOnce({
       created: true,
       duplicatePlaceId: null,
+      enriched: true,
+      missingFields: [],
       place: { id: 5, name: "Lake" },
       googlePlace: {
         externalId: "g-lake",
@@ -814,9 +831,31 @@ describe("requireTrip-guarded tools", () => {
     expect(result).toMatchObject({
       ok: true,
       created: true,
+      enriched: true,
+      missing_fields: [],
       place_id: 5,
       google_place: { maps_url: "https://maps.google.com/?cid=lake" },
     });
+  });
+
+  it("add_place copies a saved interesting place when saved_place_id is provided", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Utah" });
+    m.saveTripPlaceFromSaved.mockResolvedValueOnce({
+      created: true,
+      duplicatePlaceId: null,
+      enriched: true,
+      missingFields: [],
+      place: { id: 8, name: "Crater Lake" },
+      googlePlace: null,
+    });
+
+    const result = await toolHandlers.add_place(ctx(7), { name: "ignored", saved_place_id: 77 });
+
+    expect(m.saveTripPlace).not.toHaveBeenCalled();
+    expect(m.saveTripPlaceFromSaved).toHaveBeenCalledWith(
+      expect.objectContaining({ tripId: 7, telegramId: 111, savedPlaceId: 77 }),
+    );
+    expect(result).toMatchObject({ ok: true, place_id: 8, enriched: true, missing_fields: [] });
   });
 
   it("add_place rejects unsupported categories", async () => {
@@ -853,23 +892,34 @@ describe("requireTrip-guarded tools", () => {
   });
 
   it("add_reservation saves booking details for the active trip", async () => {
-    m.addReservation.mockResolvedValueOnce({ id: 9, title: "Hotel" });
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Paris" });
+    m.saveReservationWithEnrichment.mockResolvedValueOnce({
+      reservation: { id: 9, title: "Hotel", address: "1 Main St" },
+      enriched: true,
+      missingFields: [],
+    });
     const result = await toolHandlers.add_reservation(ctx(7), {
       type: "hotel",
       title: "Hotel",
       confirmation_number: "ABC123",
       metadata: { room: "suite" },
     });
-    expect(m.addReservation).toHaveBeenCalledWith(
+    expect(m.saveReservationWithEnrichment).toHaveBeenCalledWith(
       expect.objectContaining({
         tripId: 7,
         type: "hotel",
         title: "Hotel",
         confirmationNumber: "ABC123",
         metadata: { room: "suite" },
+        destination: "Paris",
       }),
     );
-    expect(result).toMatchObject({ ok: true, reservation_id: 9 });
+    expect(result).toMatchObject({
+      ok: true,
+      enriched: true,
+      missing_fields: [],
+      reservation_id: 9,
+    });
   });
 
   it("list_reservations returns saved bookings for the active trip", async () => {
@@ -1130,18 +1180,31 @@ describe("requireTrip-guarded tools", () => {
   });
 
   it("update_reservation updates a booking in the active trip", async () => {
-    m.updateReservation.mockResolvedValueOnce({ id: 9, title: "Updated" });
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Paris" });
+    m.getReservation.mockResolvedValueOnce({ id: 9, type: "hotel", title: "Old", address: null, metadata: {} });
+    m.updateReservationWithEnrichment.mockResolvedValueOnce({
+      reservation: { id: 9, title: "Updated" },
+      enriched: false,
+      missingFields: ["address"],
+    });
     const result = await toolHandlers.update_reservation(ctx(7), {
       reservation_id: 9,
       title: "Updated",
       confirmation_number: "XYZ789",
     });
-    expect(m.updateReservation).toHaveBeenCalledWith(
+    expect(m.updateReservationWithEnrichment).toHaveBeenCalledWith(
       7,
       9,
       expect.objectContaining({ title: "Updated", confirmationNumber: "XYZ789" }),
+      expect.objectContaining({ id: 9 }),
+      "Paris",
     );
-    expect(result).toMatchObject({ ok: true, reservation_id: 9 });
+    expect(result).toMatchObject({
+      ok: true,
+      reservation_id: 9,
+      enriched: false,
+      missing_fields: ["address"],
+    });
   });
 
   it("delete_reservation requires explicit confirmation", async () => {

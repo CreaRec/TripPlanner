@@ -120,6 +120,8 @@ async function downloadTelegramFile(ctx: {
 function imagePromptFromExtraction(extracted: string, caption?: string): string {
   const lines = [
     "The user sent an image containing trip information. Use the extracted details below to update the active trip.",
+    "Save immediately with add_place, save_interesting_place, or add_reservation — server-side auto-enrichment will run. Do not call search_place_details before saving.",
+    "If save tools return missing_fields, mention them once and offer optional follow-up if the user wants to provide more details.",
     "Save relevant hotel, car rental, reservation, itinerary, place, date, time, address, and confirmation details using the available tools.",
   ];
   if (caption?.trim()) {

@@ -62,6 +62,12 @@ export async function listReservations(tripId: number): Promise<Reservation[]> {
   });
 }
 
+export async function getReservation(tripId: number, reservationId: number): Promise<Reservation | null> {
+  return prisma.reservation.findFirst({
+    where: { id: reservationId, tripId },
+  });
+}
+
 export async function updateReservation(
   tripId: number,
   reservationId: number,

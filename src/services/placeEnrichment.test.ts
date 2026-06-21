@@ -66,6 +66,8 @@ describe("enrichPlace", () => {
       googlePlace: null,
       updated: false,
       duplicatePlaceId: null,
+      enriched: false,
+      missingFields: [],
     });
   });
 
@@ -91,7 +93,7 @@ describe("enrichPlace", () => {
         notes: "Go early\nCheck tickets, timed entry, or permits on the official website.",
       }),
     );
-    expect(result).toMatchObject({ updated: true, duplicatePlaceId: null });
+    expect(result).toMatchObject({ updated: true, duplicatePlaceId: null, enriched: true });
   });
 
   it("does not update when another place already has the Google id", async () => {
@@ -102,7 +104,7 @@ describe("enrichPlace", () => {
     const result = await enrichPlace({ tripId: 7, placeId: 5, externalId: "abc" });
 
     expect(m.updatePlace).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ updated: false, duplicatePlaceId: 9 });
+    expect(result).toMatchObject({ updated: false, duplicatePlaceId: 9, enriched: true });
   });
 });
 
@@ -141,14 +143,28 @@ describe("saveTripPlace", () => {
         notes: "Stop here",
       }),
     );
-    expect(result).toMatchObject({ created: true, googlePlace: null, duplicatePlaceId: null });
+    expect(result).toMatchObject({
+      created: true,
+      googlePlace: null,
+      duplicatePlaceId: null,
+      enriched: false,
+      missingFields: ["address", "maps_url", "coordinates"],
+    });
   });
 
   it("creates an enriched place when Google has a match", async () => {
     m.searchGooglePlaces.mockResolvedValueOnce([{ externalId: "abc" }]);
     m.getGooglePlaceDetails.mockResolvedValueOnce(googlePlace);
     m.findPlaceByExternalId.mockResolvedValueOnce(null);
-    m.addPlace.mockResolvedValueOnce({ id: 5, name: "Louvre Museum" });
+    m.addPlace.mockResolvedValueOnce({
+      id: 5,
+      name: "Louvre Museum",
+      address: "Rue de Rivoli",
+      mapsUrl: "https://maps.google.com/?cid=abc",
+      latitude: 48.8606,
+      longitude: 2.3376,
+      externalId: "abc",
+    });
 
     const result = await saveTripPlace({ tripId: 7, query: "Louvre", destination: "Paris" });
 
@@ -161,7 +177,13 @@ describe("saveTripPlace", () => {
         mapsUrl: "https://maps.google.com/?cid=abc",
       }),
     );
-    expect(result).toMatchObject({ created: true, place: { id: 5 }, duplicatePlaceId: null });
+    expect(result).toMatchObject({
+      created: true,
+      place: { id: 5 },
+      duplicatePlaceId: null,
+      enriched: true,
+      missingFields: [],
+    });
   });
 
   it("updates an existing Google-backed place instead of duplicating it", async () => {
@@ -169,11 +191,19 @@ describe("saveTripPlace", () => {
     m.searchGooglePlaces.mockResolvedValueOnce([{ externalId: "abc" }]);
     m.getGooglePlaceDetails.mockResolvedValueOnce(googlePlace);
     m.findPlaceByExternalId.mockResolvedValueOnce(existing);
-    m.updatePlace.mockResolvedValueOnce({ ...existing, name: "Louvre Museum" });
+    m.updatePlace.mockResolvedValueOnce({
+      ...existing,
+      name: "Louvre Museum",
+      address: "Rue de Rivoli",
+      mapsUrl: "https://maps.google.com/?cid=abc",
+      latitude: 48.8606,
+      longitude: 2.3376,
+      externalId: "abc",
+    });
 
     const result = await saveTripPlace({ tripId: 7, query: "Louvre", destination: "Paris" });
 
     expect(m.addPlace).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ created: false, duplicatePlaceId: 9 });
+    expect(result).toMatchObject({ created: false, duplicatePlaceId: 9, enriched: true });
   });
 });

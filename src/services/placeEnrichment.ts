@@ -1,6 +1,10 @@
 import type { Place } from "@prisma/client";
 import {
-  getGooglePlaceDetails,
+  fetchGooglePlaceDetails,
+  placeMissingFields,
+  resolveGoogleExternalId,
+} from "./enrichmentUtils";
+import {
   searchGooglePlaces,
   type GooglePlaceDetails,
   type GooglePlaceSummary,
@@ -13,6 +17,7 @@ import {
   updatePlace,
   type PlaceCategory,
 } from "./places";
+import { getSavedPlace, type SavedPlace } from "./savedPlaces";
 
 export interface SearchPlaceDetailsInput {
   query: string;
@@ -33,6 +38,8 @@ export interface EnrichPlaceResult {
   googlePlace: GooglePlaceDetails | null;
   updated: boolean;
   duplicatePlaceId: number | null;
+  enriched: boolean;
+  missingFields: string[];
 }
 
 export interface SaveTripPlaceInput {
@@ -50,11 +57,23 @@ export interface SaveTripPlaceInput {
   notes?: string | null;
 }
 
+export interface SaveTripPlaceFromSavedInput {
+  tripId: number;
+  telegramId: number;
+  savedPlaceId: number;
+  priority?: number | null;
+  durationMin?: number | null;
+  kidFriendly?: boolean | null;
+  notes?: string | null;
+}
+
 export interface SaveTripPlaceResult {
   place: Place;
   googlePlace: GooglePlaceDetails | null;
   created: boolean;
   duplicatePlaceId: number | null;
+  enriched: boolean;
+  missingFields: string[];
 }
 
 export async function searchPlaceDetails(input: SearchPlaceDetailsInput): Promise<GooglePlaceSummary[]> {
@@ -73,6 +92,68 @@ function mergeAdviceIntoNotes(notes: string | null, advice: string | null): stri
 function categoryForUpdate(place: Place | null, googlePlace: GooglePlaceDetails) {
   if (googlePlace.category !== DEFAULT_PLACE_CATEGORY) return googlePlace.category;
   return place?.category ?? DEFAULT_PLACE_CATEGORY;
+}
+
+function resultFromTripPlace(
+  place: Place,
+  googlePlace: GooglePlaceDetails | null,
+  created: boolean,
+  duplicatePlaceId: number | null,
+): SaveTripPlaceResult {
+  return {
+    place,
+    googlePlace,
+    created,
+    duplicatePlaceId,
+    enriched: Boolean(googlePlace || place.externalId),
+    missingFields: placeMissingFields(place),
+  };
+}
+
+function savedPlaceToTripInput(
+  saved: SavedPlace,
+  input: Pick<SaveTripPlaceFromSavedInput, "tripId" | "priority" | "durationMin" | "kidFriendly" | "notes">,
+): Parameters<typeof addPlace>[0] {
+  return {
+    tripId: input.tripId,
+    name: saved.name,
+    category: saved.category,
+    address: saved.address,
+    latitude: saved.latitude,
+    longitude: saved.longitude,
+    externalProvider: saved.externalProvider,
+    externalId: saved.externalId,
+    websiteUrl: saved.websiteUrl,
+    mapsUrl: saved.mapsUrl,
+    phone: saved.phone,
+    bookingUrl: saved.bookingUrl,
+    ticketUrl: saved.ticketUrl,
+    reservationRecommended: saved.reservationRecommended,
+    openingHours: saved.openingHours === null ? null : (saved.openingHours as object),
+    rating: saved.rating,
+    priceLevel: saved.priceLevel,
+    priority: input.priority ?? saved.priority,
+    durationMin: input.durationMin ?? saved.durationMin,
+    kidFriendly: input.kidFriendly ?? saved.kidFriendly,
+    notes: [saved.notes, input.notes].filter(Boolean).join("\n") || null,
+  };
+}
+
+export async function saveTripPlaceFromSaved(input: SaveTripPlaceFromSavedInput): Promise<SaveTripPlaceResult> {
+  const saved = await getSavedPlace(input.telegramId, input.savedPlaceId);
+  if (!saved) {
+    throw new Error("Saved place not found.");
+  }
+
+  if (saved.externalProvider && saved.externalId) {
+    const existing = await findPlaceByExternalId(input.tripId, saved.externalProvider, saved.externalId);
+    if (existing) {
+      return resultFromTripPlace(existing, null, false, existing.id);
+    }
+  }
+
+  const place = await addPlace(savedPlaceToTripInput(saved, input));
+  return resultFromTripPlace(place, null, true, null);
 }
 
 function inputFromGooglePlace(
@@ -108,25 +189,54 @@ function inputFromGooglePlace(
 export async function enrichPlace(input: EnrichPlaceInput): Promise<EnrichPlaceResult> {
   const place = await getPlace(input.tripId, input.placeId);
   if (!place) {
-    return { place: null, googlePlace: null, updated: false, duplicatePlaceId: null };
+    return {
+      place: null,
+      googlePlace: null,
+      updated: false,
+      duplicatePlaceId: null,
+      enriched: false,
+      missingFields: [],
+    };
   }
 
-  const externalId =
-    input.externalId ??
-    place.externalId ??
-    (await searchGooglePlaces(input.query ?? place.name, {
-      destination: input.destination,
-      maxResults: 1,
-    }))[0]?.externalId;
+  const externalId = await resolveGoogleExternalId(input.query ?? place.name, {
+    destination: input.destination,
+    externalId: input.externalId ?? place.externalId,
+  });
 
   if (!externalId) {
-    return { place, googlePlace: null, updated: false, duplicatePlaceId: null };
+    return {
+      place,
+      googlePlace: null,
+      updated: false,
+      duplicatePlaceId: null,
+      enriched: false,
+      missingFields: placeMissingFields(place),
+    };
   }
 
-  const googlePlace = await getGooglePlaceDetails(externalId);
+  const googlePlace = await fetchGooglePlaceDetails(externalId);
+  if (!googlePlace) {
+    return {
+      place,
+      googlePlace: null,
+      updated: false,
+      duplicatePlaceId: null,
+      enriched: false,
+      missingFields: placeMissingFields(place),
+    };
+  }
+
   const duplicate = await findPlaceByExternalId(input.tripId, googlePlace.provider, googlePlace.externalId);
   if (duplicate && duplicate.id !== place.id) {
-    return { place: duplicate, googlePlace, updated: false, duplicatePlaceId: duplicate.id };
+    return {
+      place: duplicate,
+      googlePlace,
+      updated: false,
+      duplicatePlaceId: duplicate.id,
+      enriched: true,
+      missingFields: placeMissingFields(duplicate),
+    };
   }
 
   const updatedPlace = await updatePlace(input.tripId, place.id, {
@@ -149,16 +259,22 @@ export async function enrichPlace(input: EnrichPlaceInput): Promise<EnrichPlaceR
     notes: mergeAdviceIntoNotes(place.notes, googlePlace.advice),
   });
 
-  return { place: updatedPlace, googlePlace, updated: Boolean(updatedPlace), duplicatePlaceId: null };
+  const resultPlace = updatedPlace ?? place;
+  return {
+    place: updatedPlace,
+    googlePlace,
+    updated: Boolean(updatedPlace),
+    duplicatePlaceId: null,
+    enriched: true,
+    missingFields: placeMissingFields(resultPlace),
+  };
 }
 
 export async function saveTripPlace(input: SaveTripPlaceInput): Promise<SaveTripPlaceResult> {
-  const externalId =
-    input.externalId ??
-    (await searchGooglePlaces(input.query, {
-      destination: input.destination,
-      maxResults: 1,
-    }))[0]?.externalId;
+  const externalId = await resolveGoogleExternalId(input.query, {
+    destination: input.destination,
+    externalId: input.externalId,
+  });
 
   if (!externalId) {
     const place = await addPlace({
@@ -173,10 +289,26 @@ export async function saveTripPlace(input: SaveTripPlaceInput): Promise<SaveTrip
       kidFriendly: input.kidFriendly,
       notes: input.notes,
     });
-    return { place, googlePlace: null, created: true, duplicatePlaceId: null };
+    return resultFromTripPlace(place, null, true, null);
   }
 
-  const googlePlace = await getGooglePlaceDetails(externalId);
+  const googlePlace = await fetchGooglePlaceDetails(externalId);
+  if (!googlePlace) {
+    const place = await addPlace({
+      tripId: input.tripId,
+      name: input.query,
+      category: input.category,
+      address: input.address,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      priority: input.priority,
+      durationMin: input.durationMin,
+      kidFriendly: input.kidFriendly,
+      notes: input.notes,
+    });
+    return resultFromTripPlace(place, null, true, null);
+  }
+
   const existing = await findPlaceByExternalId(input.tripId, googlePlace.provider, googlePlace.externalId);
   if (existing) {
     const updated = await updatePlace(input.tripId, existing.id, {
@@ -187,14 +319,9 @@ export async function saveTripPlace(input: SaveTripPlaceInput): Promise<SaveTrip
         googlePlace.advice,
       ),
     });
-    return {
-      place: updated ?? existing,
-      googlePlace,
-      created: false,
-      duplicatePlaceId: existing.id,
-    };
+    return resultFromTripPlace(updated ?? existing, googlePlace, false, existing.id);
   }
 
   const place = await addPlace(inputFromGooglePlace(input.tripId, googlePlace, input));
-  return { place, googlePlace, created: true, duplicatePlaceId: null };
+  return resultFromTripPlace(place, googlePlace, true, null);
 }

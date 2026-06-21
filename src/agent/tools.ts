@@ -21,15 +21,19 @@ import { deleteMemory, listMemories, replaceMemory, saveMemory, searchMemories }
 import { formatTripSummary } from "../services/tripSummaryFormat";
 import type { TripSummaryFormat, TripSummaryLocale } from "../services/tripSummaryFormat";
 import {
-  addReservation,
   deleteReservation,
+  getReservation,
   listReservations,
-  updateReservation,
 } from "../services/reservations";
+import {
+  saveReservationWithEnrichment,
+  updateReservationWithEnrichment,
+} from "../services/reservationEnrichment";
 import { exportItineraryCsv, exportItineraryPdf } from "../services/export";
 import {
   enrichPlace,
   saveTripPlace,
+  saveTripPlaceFromSaved,
   searchPlaceDetails,
 } from "../services/placeEnrichment";
 import type { GooglePlaceDetails } from "../services/googlePlaces";
@@ -144,7 +148,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "add_reservation",
       description:
-        "Save a confirmed or likely booking/reservation for the active trip, such as a hotel, car rental, flight, campsite, or other reservation.",
+        "Save a confirmed or likely booking/reservation for the active trip. Automatically enriches location details via Google Places when possible. Returns missing_fields for optional follow-up; do not call search_place_details before saving.",
       parameters: {
         type: "object",
         properties: {
@@ -288,11 +292,15 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "add_place",
       description:
-        "Save a point of interest to the active trip. Automatically enriches the place with Google Places details when possible.",
+        "Save a point of interest to the active trip. Automatically enriches with Google Places when possible. Returns missing_fields for optional follow-up. Do not call search_place_details before saving. Use saved_place_id to copy an existing general interesting place into the trip.",
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "Place name or Google Places search query." },
+          saved_place_id: {
+            type: "integer",
+            description: "Optional id from general interesting places to copy into the trip without re-searching.",
+          },
           external_id: { type: "string", description: "Google Places id if already known." },
           category: { type: "string", enum: PLACE_CATEGORY_VALUES },
           address: { type: "string" },
@@ -328,7 +336,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "search_place_details",
       description:
-        "Search Google Places for richer details about a place without saving anything. Works without an active trip; if an active trip exists, its destination is used as search context unless destination is provided. Use when a place name may be ambiguous, then pass the selected external_id to enrich_place or enrich_interesting_place when updating an existing place.",
+        "Search Google Places without saving. Do NOT use before add_place or save_interesting_place. Use only when the user wants to browse candidates without saving, or to research before deciding.",
       parameters: {
         type: "object",
         properties: {
@@ -345,7 +353,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "enrich_place",
       description:
-        "Enrich an existing place in the active trip with Google Places details: address, coordinates, links, hours/rating, and booking or ticket advice. Requires an active trip. If search_place_details returned one clear match, call enrich_place with the existing place_id and that result's external_id.",
+        "Enrich an existing trip place with Google Places details. Do NOT use before add_place. Use for already saved places missing address/maps_url, or when the user explicitly asks for details.",
       parameters: {
         type: "object",
         properties: {
@@ -362,7 +370,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "enrich_interesting_place",
       description:
-        "Enrich an existing place in the user's general interesting places list with Google Places details. Works without an active trip. If search_place_details returned one clear match, call enrich_interesting_place with the saved_place_id and that result's external_id.",
+        "Enrich an existing general interesting place with Google Places details. Do NOT use before save_interesting_place. Use for already saved places missing address/maps_url, or when the user explicitly asks for details.",
       parameters: {
         type: "object",
         properties: {
@@ -425,7 +433,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "save_interesting_place",
       description:
-        "Save a place to the user's general interesting places list, not to the active trip. Works even when there is no active trip. Uses Google Places enrichment when possible.",
+        "Save a place to the user's general interesting places list, not to the active trip. Automatically enriches with Google Places when possible. Returns missing_fields for optional follow-up. Do not call search_place_details before saving.",
       parameters: {
         type: "object",
         properties: {
@@ -1060,24 +1068,40 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const tripId = requireTrip(ctx);
     const trip = await getTrip(ctx.telegramId, tripId);
     if (!trip) throw new Error("Active trip not found.");
-    const result = await saveTripPlace({
-      tripId,
-      query: String(args.name),
-      destination: trip.destination,
-      externalId: (args.external_id as string) ?? null,
-      category:
-        args.category !== undefined ? requirePlaceCategory(args.category, "category") : null,
-      address: (args.address as string) ?? null,
-      latitude: (args.latitude as number) ?? null,
-      longitude: (args.longitude as number) ?? null,
-      priority: (args.priority as number) ?? null,
-      durationMin: (args.duration_min as number) ?? null,
-      kidFriendly: (args.kid_friendly as boolean) ?? null,
-      notes: (args.notes as string) ?? null,
-    });
+
+    const result =
+      args.saved_place_id !== undefined
+        ? await saveTripPlaceFromSaved({
+            tripId,
+            telegramId: ctx.telegramId,
+            savedPlaceId: requireInteger(args.saved_place_id, "saved_place_id"),
+            priority: args.priority !== undefined ? requireInteger(args.priority, "priority") : null,
+            durationMin:
+              args.duration_min !== undefined ? requireInteger(args.duration_min, "duration_min") : null,
+            kidFriendly: args.kid_friendly !== undefined ? Boolean(args.kid_friendly) : null,
+            notes: (args.notes as string) ?? null,
+          })
+        : await saveTripPlace({
+            tripId,
+            query: String(args.name),
+            destination: trip.destination,
+            externalId: (args.external_id as string) ?? null,
+            category:
+              args.category !== undefined ? requirePlaceCategory(args.category, "category") : null,
+            address: (args.address as string) ?? null,
+            latitude: (args.latitude as number) ?? null,
+            longitude: (args.longitude as number) ?? null,
+            priority: (args.priority as number) ?? null,
+            durationMin: (args.duration_min as number) ?? null,
+            kidFriendly: (args.kid_friendly as boolean) ?? null,
+            notes: (args.notes as string) ?? null,
+          });
+
     return {
       ok: true,
       created: result.created,
+      enriched: result.enriched,
+      missing_fields: result.missingFields,
       place_id: result.place.id,
       name: result.place.name,
       duplicate_place_id: result.duplicatePlaceId,
@@ -1143,6 +1167,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
     });
     return {
       ok: result.updated,
+      enriched: result.enriched,
+      missing_fields: result.missingFields,
       place_id: result.place?.id ?? null,
       duplicate_place_id: result.duplicatePlaceId,
       google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
@@ -1158,6 +1184,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
     });
     return {
       ok: result.updated,
+      enriched: result.enriched,
+      missing_fields: result.missingFields,
       saved_place_id: result.place?.id ?? null,
       duplicate_saved_place_id: result.duplicateSavedPlaceId,
       place: result.place ? savedPlaceToToolResult(result.place) : null,
@@ -1203,9 +1231,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async save_interesting_place(ctx, args) {
+    const trip =
+      ctx.activeTripId === null ? null : await getTrip(ctx.telegramId, ctx.activeTripId);
     const result = await saveInterestingPlace({
       telegramId: ctx.telegramId,
       query: String(args.query),
+      destination: trip?.destination ?? null,
       externalId: (args.external_id as string) ?? null,
       status:
         args.status !== undefined ? requireSavedPlaceStatus(args.status, "status") : "want_to_visit",
@@ -1219,6 +1250,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
     return {
       ok: true,
       created: result.created,
+      enriched: result.enriched,
+      missing_fields: result.missingFields,
       saved_place_id: result.place.id,
       place: savedPlaceToToolResult(result.place),
       google_place: result.googlePlace ? googlePlaceToToolResult(result.googlePlace) : null,
@@ -1378,11 +1411,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async add_reservation(ctx, args) {
     const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
     const metadata =
       args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)
         ? (args.metadata as Prisma.InputJsonObject)
         : undefined;
-    const reservation = await addReservation({
+    const result = await saveReservationWithEnrichment({
       tripId,
       type: String(args.type),
       title: String(args.title),
@@ -1394,8 +1429,16 @@ export const toolHandlers: Record<string, ToolHandler> = {
       status: (args.status as string) ?? null,
       notes: (args.notes as string) ?? null,
       metadata,
+      destination: trip.destination,
     });
-    return { ok: true, reservation_id: reservation.id, title: reservation.title };
+    return {
+      ok: true,
+      enriched: result.enriched,
+      missing_fields: result.missingFields,
+      reservation_id: result.reservation.id,
+      title: result.reservation.title,
+      address: result.reservation.address,
+    };
   },
 
   async list_reservations(ctx) {
@@ -1417,13 +1460,21 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async update_reservation(ctx, args) {
     const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+    const reservationId = requireInteger(args.reservation_id, "reservation_id");
+    const existing = await getReservation(tripId, reservationId);
+    if (!existing) {
+      return { ok: false, reservation_id: null, enriched: false, missing_fields: [] };
+    }
+
     const metadata =
       args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)
         ? (args.metadata as Prisma.InputJsonObject)
         : undefined;
-    const reservation = await updateReservation(
+    const result = await updateReservationWithEnrichment(
       tripId,
-      requireInteger(args.reservation_id, "reservation_id"),
+      reservationId,
       {
         ...(args.type !== undefined ? { type: String(args.type) } : {}),
         ...(args.title !== undefined ? { title: String(args.title) } : {}),
@@ -1438,8 +1489,15 @@ export const toolHandlers: Record<string, ToolHandler> = {
         ...(args.notes !== undefined ? { notes: args.notes as string } : {}),
         ...(metadata !== undefined ? { metadata } : {}),
       },
+      existing,
+      trip.destination,
     );
-    return { ok: Boolean(reservation), reservation_id: reservation?.id };
+    return {
+      ok: Boolean(result),
+      reservation_id: result?.reservation.id,
+      enriched: result?.enriched ?? false,
+      missing_fields: result?.missingFields ?? [],
+    };
   },
 
   async delete_reservation(ctx, args) {
