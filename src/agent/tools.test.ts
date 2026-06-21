@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EnrichmentProvider } from "../services/enrichmentProvider";
 
 const m = vi.hoisted(() => ({
   createTrip: vi.fn(),
@@ -24,10 +25,28 @@ const m = vi.hoisted(() => ({
   addReservation: vi.fn(),
   deleteReservation: vi.fn(),
   getReservation: vi.fn(),
+  getReservationForUser: vi.fn(),
+  listEnrichableReservationsForUser: vi.fn(),
   listReservations: vi.fn(),
   updateReservation: vi.fn(),
   saveReservationWithEnrichment: vi.fn(),
   updateReservationWithEnrichment: vi.fn(),
+  reEnrichReservation: vi.fn(),
+  reEnrichReservations: vi.fn(),
+  reEnrichFlightReservations: vi.fn(),
+  summarizeReEnrichResults: vi.fn((results: Array<{ reservation: { id: number; type?: string }; enriched: boolean; enrichmentProvider: EnrichmentProvider | null; telemetry: Record<string, unknown> }>) => ({
+    count: results.length,
+    enriched_count: results.filter((result) => result.enriched).length,
+    aviationstack_used_count: results.filter((result) => result.enrichmentProvider === EnrichmentProvider.AviationStack).length,
+    google_places_used_count: results.filter((result) => result.enrichmentProvider === EnrichmentProvider.GooglePlaces).length,
+    results: results.map((result) => ({
+      reservation_id: result.reservation.id,
+      type: result.reservation.type,
+      enriched: result.enriched,
+      enrichment_provider: result.enrichmentProvider,
+      ...result.telemetry,
+    })),
+  })),
   exportItineraryCsv: vi.fn(),
   exportItineraryPdf: vi.fn(),
   searchPlaceDetails: vi.fn(),
@@ -95,16 +114,26 @@ vi.mock("../services/memories", () => ({
   saveMemory: m.saveMemory,
   searchMemories: m.searchMemories,
 }));
-vi.mock("../services/reservations", () => ({
-  addReservation: m.addReservation,
-  deleteReservation: m.deleteReservation,
-  getReservation: m.getReservation,
-  listReservations: m.listReservations,
-  updateReservation: m.updateReservation,
-}));
+vi.mock("../services/reservations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/reservations")>();
+  return {
+    ...actual,
+    addReservation: m.addReservation,
+    deleteReservation: m.deleteReservation,
+    getReservation: m.getReservation,
+    getReservationForUser: m.getReservationForUser,
+    listEnrichableReservationsForUser: m.listEnrichableReservationsForUser,
+    listReservations: m.listReservations,
+    updateReservation: m.updateReservation,
+  };
+});
 vi.mock("../services/reservationEnrichment", () => ({
   saveReservationWithEnrichment: m.saveReservationWithEnrichment,
   updateReservationWithEnrichment: m.updateReservationWithEnrichment,
+  reEnrichReservation: m.reEnrichReservation,
+  reEnrichReservations: m.reEnrichReservations,
+  reEnrichFlightReservations: m.reEnrichFlightReservations,
+  summarizeReEnrichResults: m.summarizeReEnrichResults,
 }));
 vi.mock("../services/export", () => ({
   exportItineraryCsv: m.exportItineraryCsv,
@@ -220,6 +249,7 @@ describe("toolDefinitions", () => {
         "list_reservations",
         "update_reservation",
         "delete_reservation",
+        "enrich_reservation",
         "set_day",
         "add_itinerary_item",
         "update_itinerary_item",
@@ -1205,6 +1235,151 @@ describe("requireTrip-guarded tools", () => {
       enriched: false,
       missing_fields: ["address"],
     });
+  });
+
+  it("enrich_reservation re-enriches one flight by reservation id", async () => {
+    m.getReservationForUser.mockResolvedValueOnce({
+      id: 6,
+      tripId: 7,
+      type: "flight",
+      title: "AS215",
+      trip: { id: 7, destination: "US" },
+    });
+    m.reEnrichReservation.mockResolvedValueOnce({
+      reservation: { id: 6, title: "AS215" },
+      enriched: true,
+      missingFields: [],
+      enrichmentProvider: EnrichmentProvider.AviationStack,
+      telemetry: {
+        aviationStackConfigured: true,
+        aviationStackFlightRequested: true,
+        aviationStackFlightMatched: true,
+        aviationStackAirportRequests: 2,
+        googlePlacesRequests: 2,
+      },
+    });
+
+    const result = await toolHandlers.enrich_reservation(ctx(7), { reservation_id: 6 });
+
+    expect(m.reEnrichReservation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 6, type: "flight" }),
+      "US",
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      count: 1,
+      enriched_count: 1,
+      aviationstack_used_count: 1,
+    });
+  });
+
+  it("enrich_reservation re-enriches all flights in the active trip", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "US" });
+    m.listReservations.mockResolvedValueOnce([
+      { id: 6, tripId: 7, type: "flight", title: "AS215" },
+      { id: 7, tripId: 7, type: "flight", title: "AS604" },
+      { id: 8, tripId: 7, type: "hotel", title: "Hotel" },
+    ]);
+    m.reEnrichReservations.mockResolvedValueOnce([
+      {
+        reservation: { id: 6, title: "AS215" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.AviationStack,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
+      },
+      {
+        reservation: { id: 7, title: "AS604" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.AviationStack,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
+      },
+    ]);
+
+    const result = await toolHandlers.enrich_reservation(ctx(7), { all_flights: true });
+
+    expect(m.reEnrichReservations).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ id: 6, type: "flight" }),
+        expect.objectContaining({ id: 7, type: "flight" }),
+        expect.objectContaining({ id: 8, type: "hotel" }),
+      ],
+      expect.any(Map),
+      { types: ["flight"] },
+    );
+    expect(result).toMatchObject({ ok: true, count: 2, enriched_count: 2 });
+  });
+
+  it("enrich_reservation re-enriches all reservations in the active trip", async () => {
+    m.getTrip.mockResolvedValueOnce({ id: 7, destination: "Paris" });
+    m.listReservations.mockResolvedValueOnce([
+      { id: 6, tripId: 7, type: "flight", title: "AS215" },
+      { id: 8, tripId: 7, type: "hotel", title: "Grand Hotel" },
+    ]);
+    m.reEnrichReservations.mockResolvedValueOnce([
+      {
+        reservation: { id: 6, title: "AS215", type: "flight" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.AviationStack,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
+      },
+      {
+        reservation: { id: 8, title: "Grand Hotel", type: "hotel" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: false, aviationStackFlightMatched: false, aviationStackAirportRequests: 0, googlePlacesRequests: 1 },
+      },
+    ]);
+
+    const result = await toolHandlers.enrich_reservation(ctx(7), { all_reservations: true });
+
+    expect(m.reEnrichReservations).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ id: 6, type: "flight" }),
+        expect.objectContaining({ id: 8, type: "hotel" }),
+      ],
+      expect.any(Map),
+    );
+    expect(result).toMatchObject({ ok: true, count: 2, enriched_count: 2, google_places_used_count: 1 });
+  });
+
+  it("enrich_reservation re-enriches all reservations across user trips", async () => {
+    m.listEnrichableReservationsForUser.mockResolvedValueOnce([
+      { id: 6, tripId: 7, type: "flight", title: "AS215", trip: { id: 7, destination: "US" } },
+      { id: 8, tripId: 7, type: "hotel", title: "Grand Hotel", trip: { id: 7, destination: "Paris" } },
+      { id: 9, tripId: 8, type: "flight", title: "AS604", trip: { id: 8, destination: "US" } },
+    ]);
+    m.reEnrichReservations.mockResolvedValueOnce([
+      {
+        reservation: { id: 6, title: "AS215" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.AviationStack,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
+      },
+      {
+        reservation: { id: 8, title: "Grand Hotel", type: "hotel" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: false, aviationStackFlightMatched: false, aviationStackAirportRequests: 0, googlePlacesRequests: 1 },
+      },
+      {
+        reservation: { id: 9, title: "AS604", type: "flight" },
+        enriched: true,
+        missingFields: [],
+        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: false, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
+      },
+    ]);
+
+    const result = await toolHandlers.enrich_reservation(ctx(null), { all_trips: true });
+
+    expect(m.listEnrichableReservationsForUser).toHaveBeenCalledWith(111);
+    expect(result).toMatchObject({ ok: true, count: 3, enriched_count: 3 });
   });
 
   it("delete_reservation requires explicit confirmation", async () => {

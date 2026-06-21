@@ -3,6 +3,18 @@ import { prisma } from "../db/prisma";
 
 export type ReservationType = "hotel" | "car_rental" | "flight" | "campsite" | "other";
 
+export const ENRICHABLE_RESERVATION_TYPES = [
+  "flight",
+  "hotel",
+  "car_rental",
+  "campsite",
+  "other",
+] as const satisfies readonly ReservationType[];
+
+export function isEnrichableReservationType(type: string): boolean {
+  return (ENRICHABLE_RESERVATION_TYPES as readonly string[]).includes(type);
+}
+
 export interface AddReservationInput {
   tripId: number;
   type: ReservationType | string;
@@ -65,6 +77,29 @@ export async function listReservations(tripId: number): Promise<Reservation[]> {
 export async function getReservation(tripId: number, reservationId: number): Promise<Reservation | null> {
   return prisma.reservation.findFirst({
     where: { id: reservationId, tripId },
+  });
+}
+
+export async function getReservationForUser(
+  telegramId: number,
+  reservationId: number,
+): Promise<(Reservation & { trip: { id: number; destination: string | null } }) | null> {
+  return prisma.reservation.findFirst({
+    where: { id: reservationId, trip: { telegramId: BigInt(telegramId) } },
+    include: { trip: { select: { id: true, destination: true } } },
+  });
+}
+
+export async function listEnrichableReservationsForUser(
+  telegramId: number,
+): Promise<(Reservation & { trip: { id: number; destination: string | null } })[]> {
+  return prisma.reservation.findMany({
+    where: {
+      type: { in: [...ENRICHABLE_RESERVATION_TYPES] },
+      trip: { telegramId: BigInt(telegramId) },
+    },
+    include: { trip: { select: { id: true, destination: true } } },
+    orderBy: [{ startAt: { sort: "asc", nulls: "last" } }, { id: "asc" }],
   });
 }
 

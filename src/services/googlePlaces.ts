@@ -2,7 +2,7 @@ import { config } from "../config";
 import type { PlaceCategory } from "./places";
 
 const GOOGLE_PLACES_BASE_URL = "https://places.googleapis.com/v1";
-const GOOGLE_PROVIDER = "google_places";
+import { EnrichmentProvider } from "./enrichmentProvider";
 
 const SEARCH_FIELD_MASK = [
   "places.id",
@@ -86,7 +86,7 @@ export interface PlaceSearchOptions extends GooglePlacesClientOptions {
 export interface PlaceDetailsOptions extends GooglePlacesClientOptions {}
 
 export interface GooglePlaceSummary {
-  provider: typeof GOOGLE_PROVIDER;
+  provider: EnrichmentProvider.GooglePlaces;
   externalId: string;
   name: string;
   category: PlaceCategory;
@@ -225,7 +225,7 @@ function toSummary(place: GooglePlaceResponse): GooglePlaceSummary | null {
   if (!place.id || !place.displayName?.text) return null;
   const types = place.types ?? [];
   return {
-    provider: GOOGLE_PROVIDER,
+    provider: EnrichmentProvider.GooglePlaces,
     externalId: place.id,
     name: place.displayName.text,
     category: mapGoogleTypesToPlaceCategory(types),

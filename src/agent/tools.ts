@@ -23,10 +23,16 @@ import type { TripSummaryFormat, TripSummaryLocale } from "../services/tripSumma
 import {
   deleteReservation,
   getReservation,
+  getReservationForUser,
+  isEnrichableReservationType,
+  listEnrichableReservationsForUser,
   listReservations,
 } from "../services/reservations";
 import {
+  reEnrichReservation,
+  reEnrichReservations,
   saveReservationWithEnrichment,
+  summarizeReEnrichResults,
   updateReservationWithEnrichment,
 } from "../services/reservationEnrichment";
 import { exportItineraryCsv, exportItineraryPdf } from "../services/export";
@@ -148,7 +154,7 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: "add_reservation",
       description:
-        "Save a confirmed or likely booking/reservation for the active trip. Automatically enriches location details via Google Places when possible. Returns missing_fields for optional follow-up; do not call search_place_details before saving.",
+        "Save a confirmed or likely booking/reservation for the active trip. Automatically enriches location details via Google Places when possible; flight reservations are auto-enriched via Aviation Stack (schedule, gates, airports) with Google Places fallback. Returns missing_fields for optional follow-up; do not call search_place_details before saving.",
       parameters: {
         type: "object",
         properties: {
@@ -220,6 +226,35 @@ export const toolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           confirmed: { type: "boolean", description: "Must be true after explicit user confirmation." },
         },
         required: ["reservation_id", "confirmed"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "enrich_reservation",
+      description:
+        "Force re-enrich saved reservation(s). Flights use Aviation Stack with Google Places fallback; hotels, car rentals, campsites, and other location-based reservations use Google Places. Always calls the APIs again. Use when the user asks to re-enrich/reload/update booking details. Pass reservation_id for one booking, all_reservations=true for every enrichable reservation in the active trip, all_flights=true for flights only in the active trip, or all_trips=true for every enrichable reservation across all trips.",
+      parameters: {
+        type: "object",
+        properties: {
+          reservation_id: {
+            type: "integer",
+            description: "Re-enrich one saved reservation by id.",
+          },
+          all_reservations: {
+            type: "boolean",
+            description: "Re-enrich all enrichable reservations in the active trip.",
+          },
+          all_flights: {
+            type: "boolean",
+            description: "Re-enrich only flight reservations in the active trip.",
+          },
+          all_trips: {
+            type: "boolean",
+            description: "Re-enrich all enrichable reservations across every trip owned by the user.",
+          },
+        },
       },
     },
   },
@@ -1438,6 +1473,63 @@ export const toolHandlers: Record<string, ToolHandler> = {
       reservation_id: result.reservation.id,
       title: result.reservation.title,
       address: result.reservation.address,
+    };
+  },
+
+  async enrich_reservation(ctx, args) {
+    if (args.reservation_id !== undefined) {
+      const reservation = await getReservationForUser(
+        ctx.telegramId,
+        requireInteger(args.reservation_id, "reservation_id"),
+      );
+      if (!reservation) {
+        return { ok: false, error: "Reservation not found.", count: 0, enriched_count: 0, results: [] };
+      }
+      if (!isEnrichableReservationType(reservation.type)) {
+        return {
+          ok: false,
+          error: `Reservation type "${reservation.type}" does not support enrichment.`,
+          count: 0,
+          enriched_count: 0,
+          results: [],
+        };
+      }
+      const result = await reEnrichReservation(reservation, reservation.trip.destination);
+      return { ok: true, ...summarizeReEnrichResults([result]) };
+    }
+
+    if (Boolean(args.all_trips)) {
+      const reservations = await listEnrichableReservationsForUser(ctx.telegramId);
+      const destinationByTripId = new Map(
+        reservations.map((reservation) => [reservation.tripId, reservation.trip.destination]),
+      );
+      const results = await reEnrichReservations(reservations, destinationByTripId);
+      return { ok: true, ...summarizeReEnrichResults(results) };
+    }
+
+    const tripId = requireTrip(ctx);
+    const trip = await getTrip(ctx.telegramId, tripId);
+    if (!trip) throw new Error("Active trip not found.");
+
+    const reservations = await listReservations(tripId);
+    const destinationByTripId = new Map<number, string | null>([[tripId, trip.destination]]);
+
+    if (Boolean(args.all_reservations)) {
+      const results = await reEnrichReservations(reservations, destinationByTripId);
+      return { ok: true, ...summarizeReEnrichResults(results) };
+    }
+
+    if (Boolean(args.all_flights)) {
+      const results = await reEnrichReservations(reservations, destinationByTripId, { types: ["flight"] });
+      return { ok: true, ...summarizeReEnrichResults(results) };
+    }
+
+    return {
+      ok: false,
+      error: "Provide reservation_id, all_reservations=true, all_flights=true, or all_trips=true.",
+      count: 0,
+      enriched_count: 0,
+      results: [],
     };
   },
 

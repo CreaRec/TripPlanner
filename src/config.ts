@@ -47,6 +47,7 @@ const schema = z.object({
   OPENAI_VISION_MODEL: z.string().optional(),
   EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
+  AVIATIONSTACK_API_KEY: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
@@ -74,6 +75,7 @@ export interface AppConfig {
   openaiVisionModel: string;
   embeddingModel: string;
   googleMapsApiKey?: string;
+  aviationStackApiKey?: string;
   googleOAuthClientId?: string;
   googleOAuthClientSecret?: string;
   googleOAuthRedirectUri?: string;
@@ -103,6 +105,7 @@ function build(): AppConfig {
     openaiVisionModel: parsed.OPENAI_VISION_MODEL ?? parsed.OPENAI_MODEL,
     embeddingModel: parsed.EMBEDDING_MODEL,
     googleMapsApiKey: parsed.GOOGLE_MAPS_API_KEY,
+    aviationStackApiKey: parsed.AVIATIONSTACK_API_KEY,
     googleOAuthClientId: parsed.GOOGLE_OAUTH_CLIENT_ID,
     googleOAuthClientSecret: parsed.GOOGLE_OAUTH_CLIENT_SECRET,
     googleOAuthRedirectUri: parsed.GOOGLE_OAUTH_REDIRECT_URI,
@@ -142,4 +145,8 @@ export function isGmailOAuthConfigured(): boolean {
       config.oauthTokenEncryptionKey &&
       config.publicAppUrl,
   );
+}
+
+export function isAviationStackConfigured(): boolean {
+  return Boolean(config.aviationStackApiKey?.trim());
 }
