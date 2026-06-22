@@ -1,6 +1,6 @@
 import { config } from "../config";
 import { openai } from "../openai/client";
-import { saveMemory } from "../services/memories";
+import { saveMemory } from "../services/trip/memories";
 
 const EXTRACTION_PROMPT = `You extract durable, reusable travel memories from a single user/assistant exchange.
 

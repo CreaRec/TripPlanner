@@ -18,19 +18,19 @@ const oauthMocks = vi.hoisted(() => ({
   upsertAccount: vi.fn(),
 }));
 
-vi.mock("../services/oauthState", () => ({
+vi.mock("../services/gmail/oauthState", () => ({
   GOOGLE_GMAIL_PROVIDER: "google_gmail",
   validateOAuthState: oauthMocks.validateOAuthState,
   consumeOAuthState: oauthMocks.consumeOAuthState,
   createOAuthState: oauthMocks.createOAuthState,
   purgeExpiredOAuthStates: oauthMocks.purgeExpiredOAuthStates,
 }));
-vi.mock("../services/gmailClient", () => ({
+vi.mock("../services/gmail/gmailClient", () => ({
   exchangeCodeForTokens: oauthMocks.exchangeCodeForTokens,
   fetchGoogleEmail: oauthMocks.fetchGoogleEmail,
   buildGoogleAuthorizeUrl: oauthMocks.buildGoogleAuthorizeUrl,
 }));
-vi.mock("../services/gmailAccounts", () => ({
+vi.mock("../services/gmail/gmailAccounts", () => ({
   upsertAccount: oauthMocks.upsertAccount,
 }));
 

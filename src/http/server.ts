@@ -8,14 +8,14 @@ import {
   GOOGLE_GMAIL_PROVIDER,
   purgeExpiredOAuthStates,
   validateOAuthState,
-} from "../services/oauthState";
+} from "../services/gmail/oauthState";
 import {
   buildGoogleAuthorizeUrl,
   exchangeCodeForTokens,
   fetchGoogleEmail,
-} from "../services/gmailClient";
-import { upsertAccount } from "../services/gmailAccounts";
-import { buildOAuthStartUrl } from "../services/gmailUrls";
+} from "../services/gmail/gmailClient";
+import { upsertAccount } from "../services/gmail/gmailAccounts";
+import { buildOAuthStartUrl } from "../services/gmail/gmailUrls";
 
 function htmlPage(title: string, body: string): string {
   return `<!DOCTYPE html>

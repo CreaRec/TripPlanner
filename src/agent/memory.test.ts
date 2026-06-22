@@ -8,7 +8,7 @@ const { createMock, saveMemoryMock } = vi.hoisted(() => ({
 vi.mock("../openai/client", () => ({
   openai: { chat: { completions: { create: createMock } } },
 }));
-vi.mock("../services/memories", () => ({ saveMemory: saveMemoryMock }));
+vi.mock("../services/trip/memories", () => ({ saveMemory: saveMemoryMock }));
 
 import { extractMemories } from "./memory";
 

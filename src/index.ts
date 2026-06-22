@@ -3,7 +3,7 @@ import { config, isGmailOAuthConfigured } from "./config";
 import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
 import { createHttpServer } from "./http/server";
-import { scheduleExportRetention } from "./services/exportRetention";
+import { scheduleExportRetention } from "./services/export/exportRetention";
 
 async function main(): Promise<void> {
   console.log("[startup] verifying database connection...");

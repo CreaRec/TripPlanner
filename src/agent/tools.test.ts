@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { EnrichmentProvider } from "../services/enrichmentProvider";
+import { ExternalProvider } from "../services/reservations/externalProvider";
 
 const m = vi.hoisted(() => ({
   createTrip: vi.fn(),
@@ -34,11 +34,11 @@ const m = vi.hoisted(() => ({
   reEnrichReservation: vi.fn(),
   reEnrichReservations: vi.fn(),
   reEnrichFlightReservations: vi.fn(),
-  summarizeReEnrichResults: vi.fn((results: Array<{ reservation: { id: number; type?: string }; enriched: boolean; enrichmentProvider: EnrichmentProvider | null; telemetry: Record<string, unknown> }>) => ({
+  summarizeReEnrichResults: vi.fn((results: Array<{ reservation: { id: number; type?: string }; enriched: boolean; enrichmentProvider: ExternalProvider | null; telemetry: Record<string, unknown> }>) => ({
     count: results.length,
     enriched_count: results.filter((result) => result.enriched).length,
-    aviationstack_used_count: results.filter((result) => result.enrichmentProvider === EnrichmentProvider.AviationStack).length,
-    google_places_used_count: results.filter((result) => result.enrichmentProvider === EnrichmentProvider.GooglePlaces).length,
+    aviationstack_used_count: results.filter((result) => result.enrichmentProvider === ExternalProvider.AviationStack).length,
+    google_places_used_count: results.filter((result) => result.enrichmentProvider === ExternalProvider.GooglePlaces).length,
     results: results.map((result) => ({
       reservation_id: result.reservation.id,
       type: result.reservation.type,
@@ -77,14 +77,14 @@ const m = vi.hoisted(() => ({
   startConnectFlow: vi.fn(),
 }));
 
-vi.mock("../services/trips", () => ({
+vi.mock("../services/trip/trips", () => ({
   createTrip: m.createTrip,
   deleteTrip: m.deleteTrip,
   getTrip: m.getTrip,
   listTrips: m.listTrips,
   updateTrip: m.updateTrip,
 }));
-vi.mock("../services/places", () => ({
+vi.mock("../services/places/places", () => ({
   PLACE_CATEGORIES: [
     "restaurant",
     "museum",
@@ -98,7 +98,7 @@ vi.mock("../services/places", () => ({
   updatePlace: m.updatePlace,
   getPlace: m.getPlace,
 }));
-vi.mock("../services/itinerary", () => ({
+vi.mock("../services/trip/itinerary", () => ({
   addItem: m.addItem,
   clearDay: m.clearDay,
   deleteDay: m.deleteDay,
@@ -107,15 +107,15 @@ vi.mock("../services/itinerary", () => ({
   updateItem: m.updateItem,
   upsertDay: m.upsertDay,
 }));
-vi.mock("../services/memories", () => ({
+vi.mock("../services/trip/memories", () => ({
   deleteMemory: m.deleteMemory,
   listMemories: m.listMemories,
   replaceMemory: m.replaceMemory,
   saveMemory: m.saveMemory,
   searchMemories: m.searchMemories,
 }));
-vi.mock("../services/reservations", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../services/reservations")>();
+vi.mock("../services/reservations/reservations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/reservations/reservations")>();
   return {
     ...actual,
     addReservation: m.addReservation,
@@ -127,7 +127,7 @@ vi.mock("../services/reservations", async (importOriginal) => {
     updateReservation: m.updateReservation,
   };
 });
-vi.mock("../services/reservationEnrichment", () => ({
+vi.mock("../services/reservations/reservationEnrichment", () => ({
   saveReservationWithEnrichment: m.saveReservationWithEnrichment,
   updateReservationWithEnrichment: m.updateReservationWithEnrichment,
   reEnrichReservation: m.reEnrichReservation,
@@ -135,47 +135,50 @@ vi.mock("../services/reservationEnrichment", () => ({
   reEnrichFlightReservations: m.reEnrichFlightReservations,
   summarizeReEnrichResults: m.summarizeReEnrichResults,
 }));
-vi.mock("../services/export", () => ({
+vi.mock("../services/export/export", () => ({
   exportItineraryCsv: m.exportItineraryCsv,
   exportItineraryPdf: m.exportItineraryPdf,
 }));
-vi.mock("../services/placeEnrichment", () => ({
+vi.mock("../services/places/placeEnrichment", () => ({
   searchPlaceDetails: m.searchPlaceDetails,
   enrichPlace: m.enrichPlace,
   saveTripPlace: m.saveTripPlace,
   saveTripPlaceFromSaved: m.saveTripPlaceFromSaved,
 }));
-vi.mock("../services/savedPlaces", () => ({
-  SAVED_PLACE_STATUSES: ["want_to_visit", "visited", "archived"],
-  deleteSavedPlace: m.deleteSavedPlace,
-  listSavedPlaces: m.listSavedPlaces,
-  saveInterestingPlace: m.saveInterestingPlace,
-  enrichSavedPlace: m.enrichSavedPlace,
-  updateSavedPlace: m.updateSavedPlace,
-}));
-vi.mock("../services/googleRoutes", () => ({
+vi.mock("../services/places/savedPlaces", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/places/savedPlaces")>();
+  return {
+    ...actual,
+    deleteSavedPlace: m.deleteSavedPlace,
+    listSavedPlaces: m.listSavedPlaces,
+    saveInterestingPlace: m.saveInterestingPlace,
+    enrichSavedPlace: m.enrichSavedPlace,
+    updateSavedPlace: m.updateSavedPlace,
+  };
+});
+vi.mock("../services/providers/googleRoutes", () => ({
   suggestSavedPlacesOnRoute: m.suggestSavedPlacesOnRoute,
 }));
-vi.mock("../services/staticMaps", () => ({
+vi.mock("../services/providers/staticMaps", () => ({
   generateRouteComparisonMap: m.generateRouteComparisonMap,
   isStaticMapsConfigured: m.isStaticMapsConfigured,
 }));
-vi.mock("../services/weather", () => ({
+vi.mock("../services/providers/weather", () => ({
   getWeather: m.getWeather,
   isWeatherConfigured: m.isWeatherConfigured,
 }));
-vi.mock("../services/users", () => ({ setActiveTripId: m.setActiveTripId }));
-vi.mock("../services/gmailAccounts", () => ({
+vi.mock("../services/platform/users", () => ({ setActiveTripId: m.setActiveTripId }));
+vi.mock("../services/gmail/gmailAccounts", () => ({
   listAccounts: m.listAccounts,
   getAccountByEmail: m.getAccountByEmail,
   getAccountById: m.getAccountById,
   disconnectAccount: m.disconnectAccount,
 }));
-vi.mock("../services/gmailSearchQuery", () => ({ buildGmailSearchQuery: m.buildGmailSearchQuery }));
-vi.mock("../services/gmailSearch", () => ({ searchGmailAccounts: m.searchGmailAccounts }));
-vi.mock("../services/gmailSearchSession", () => ({ saveGmailSearchSession: m.saveGmailSearchSession }));
-vi.mock("../services/gmailExport", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../services/gmailExport")>();
+vi.mock("../services/gmail/gmailSearchQuery", () => ({ buildGmailSearchQuery: m.buildGmailSearchQuery }));
+vi.mock("../services/gmail/gmailSearch", () => ({ searchGmailAccounts: m.searchGmailAccounts }));
+vi.mock("../services/gmail/gmailSearchSession", () => ({ saveGmailSearchSession: m.saveGmailSearchSession }));
+vi.mock("../services/gmail/gmailExport", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/gmail/gmailExport")>();
   return {
     ...actual,
     exportGmailMessageToPdf: m.exportGmailMessageToPdf,
@@ -1249,7 +1252,7 @@ describe("requireTrip-guarded tools", () => {
       reservation: { id: 6, title: "AS215" },
       enriched: true,
       missingFields: [],
-      enrichmentProvider: EnrichmentProvider.AviationStack,
+      enrichmentProvider: ExternalProvider.AviationStack,
       telemetry: {
         aviationStackConfigured: true,
         aviationStackFlightRequested: true,
@@ -1285,14 +1288,14 @@ describe("requireTrip-guarded tools", () => {
         reservation: { id: 6, title: "AS215" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.AviationStack,
+        enrichmentProvider: ExternalProvider.AviationStack,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
       },
       {
         reservation: { id: 7, title: "AS604" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.AviationStack,
+        enrichmentProvider: ExternalProvider.AviationStack,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
       },
     ]);
@@ -1322,14 +1325,14 @@ describe("requireTrip-guarded tools", () => {
         reservation: { id: 6, title: "AS215", type: "flight" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.AviationStack,
+        enrichmentProvider: ExternalProvider.AviationStack,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
       },
       {
         reservation: { id: 8, title: "Grand Hotel", type: "hotel" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        enrichmentProvider: ExternalProvider.GooglePlaces,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: false, aviationStackFlightMatched: false, aviationStackAirportRequests: 0, googlePlacesRequests: 1 },
       },
     ]);
@@ -1357,21 +1360,21 @@ describe("requireTrip-guarded tools", () => {
         reservation: { id: 6, title: "AS215" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.AviationStack,
+        enrichmentProvider: ExternalProvider.AviationStack,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: true, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
       },
       {
         reservation: { id: 8, title: "Grand Hotel", type: "hotel" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        enrichmentProvider: ExternalProvider.GooglePlaces,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: false, aviationStackFlightMatched: false, aviationStackAirportRequests: 0, googlePlacesRequests: 1 },
       },
       {
         reservation: { id: 9, title: "AS604", type: "flight" },
         enriched: true,
         missingFields: [],
-        enrichmentProvider: EnrichmentProvider.GooglePlaces,
+        enrichmentProvider: ExternalProvider.GooglePlaces,
         telemetry: { aviationStackConfigured: true, aviationStackFlightRequested: true, aviationStackFlightMatched: false, aviationStackAirportRequests: 2, googlePlacesRequests: 2 },
       },
     ]);

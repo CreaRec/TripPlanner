@@ -3,14 +3,14 @@ import { message } from "telegraf/filters";
 import { config, isGmailOAuthConfigured } from "../config";
 import { runAgent } from "../agent/runAgent";
 import { extractTravelInfoFromImage } from "../agent/vision";
-import { ensureUser } from "../services/users";
+import { ensureUser } from "../services/platform/users";
 import { startConnectFlow } from "../http/server";
 import {
   isConnectGmailRequest,
   parseExportGmailByNumberRequest,
-} from "../services/gmailIntents";
-import { formatGmailExportSuccessMessage } from "../services/gmailExport";
-import { exportGmailBySearchIndex } from "../services/gmailSearchSession";
+} from "../services/gmail/gmailIntents";
+import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
+import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
 
 async function sendAgentResult(
   ctx: {

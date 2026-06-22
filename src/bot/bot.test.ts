@@ -48,21 +48,21 @@ const { FakeTelegraf } = vi.hoisted(() => {
 
 vi.mock("telegraf", () => ({ Telegraf: FakeTelegraf }));
 vi.mock("telegraf/filters", () => ({ message: (kind: string) => `${kind}-filter` }));
-vi.mock("../services/users", () => ({
+vi.mock("../services/platform/users", () => ({
   ensureUser: f.ensureUser,
   getActiveTripId: f.getActiveTripId,
   setActiveTripId: f.setActiveTripId,
 }));
-vi.mock("../services/trips", () => ({ listTrips: f.listTrips, getTrip: f.getTrip }));
-vi.mock("../services/export", () => ({
+vi.mock("../services/trip/trips", () => ({ listTrips: f.listTrips, getTrip: f.getTrip }));
+vi.mock("../services/export/export", () => ({
   exportItineraryPdf: f.exportItineraryPdf,
   exportItineraryCsv: f.exportItineraryCsv,
 }));
 vi.mock("../agent/runAgent", () => ({ runAgent: f.runAgent }));
 vi.mock("../agent/vision", () => ({ extractTravelInfoFromImage: f.extractTravelInfoFromImage }));
 vi.mock("../http/server", () => ({ startConnectFlow: vi.fn().mockResolvedValue("https://example.com/oauth/start") }));
-vi.mock("../services/gmailSearchSession", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../services/gmailSearchSession")>();
+vi.mock("../services/gmail/gmailSearchSession", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/gmail/gmailSearchSession")>();
   return {
     ...actual,
     exportGmailBySearchIndex: vi.fn(),
@@ -74,7 +74,7 @@ vi.mock("../config", () => ({
 }));
 
 import { createBot } from "./bot";
-import { exportGmailBySearchIndex } from "../services/gmailSearchSession";
+import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
 
 interface FakeTelegrafHandlers {
   use: Array<(ctx: unknown, next: () => unknown) => unknown>;

@@ -24,20 +24,26 @@ const h = vi.hoisted(() => ({
 vi.mock("../openai/client", () => ({
   openai: { chat: { completions: { create: h.createMock } } },
 }));
-vi.mock("../services/users", () => ({ getActiveTripId: h.getActiveTripId }));
-vi.mock("../services/messages", () => ({
+vi.mock("../services/platform/users", () => ({ getActiveTripId: h.getActiveTripId }));
+vi.mock("../services/platform/messages", () => ({
   recentMessages: h.recentMessages,
   saveMessage: h.saveMessage,
   savePendingDestructiveAction: h.savePendingDestructiveAction,
   getPendingDestructiveAction: h.getPendingDestructiveAction,
   clearPendingDestructiveAction: h.clearPendingDestructiveAction,
 }));
-vi.mock("../services/trips", () => ({ getTrip: h.getTrip }));
-vi.mock("../services/itinerary", () => ({ getItinerary: h.getItinerary }));
-vi.mock("../services/memories", () => ({ searchMemories: h.searchMemories }));
-vi.mock("../services/reservations", () => ({ listReservations: h.listReservations }));
-vi.mock("../services/savedPlaces", () => ({ listSavedPlaces: h.listSavedPlaces }));
-vi.mock("../services/gmailAccounts", () => ({
+vi.mock("../services/trip/trips", () => ({ getTrip: h.getTrip }));
+vi.mock("../services/trip/itinerary", () => ({ getItinerary: h.getItinerary }));
+vi.mock("../services/trip/memories", () => ({ searchMemories: h.searchMemories }));
+vi.mock("../services/reservations/reservations", () => ({ listReservations: h.listReservations }));
+vi.mock("../services/places/savedPlaces", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/places/savedPlaces")>();
+  return {
+    ...actual,
+    listSavedPlaces: h.listSavedPlaces,
+  };
+});
+vi.mock("../services/gmail/gmailAccounts", () => ({
   listAccounts: h.listAccounts,
   formatGmailContextLine: (accounts: unknown[]) =>
     accounts.length === 0 ? "Gmail: not connected." : "Gmail: connected.",

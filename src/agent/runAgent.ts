@@ -1,9 +1,9 @@
 import type OpenAI from "openai";
 import { config } from "../config";
 import { openai } from "../openai/client";
-import { getTrip } from "../services/trips";
-import { getItinerary } from "../services/itinerary";
-import { searchMemories } from "../services/memories";
+import { getTrip } from "../services/trip/trips";
+import { getItinerary } from "../services/trip/itinerary";
+import { searchMemories } from "../services/trip/memories";
 import {
   clearPendingDestructiveAction,
   getPendingDestructiveAction,
@@ -11,15 +11,15 @@ import {
   recentMessages,
   saveMessage,
   savePendingDestructiveAction,
-} from "../services/messages";
-import { listReservations } from "../services/reservations";
-import { listSavedPlaces } from "../services/savedPlaces";
-import { getActiveTripId } from "../services/users";
-import { formatGmailContextLine, listAccounts } from "../services/gmailAccounts";
+} from "../services/platform/messages";
+import { listReservations } from "../services/reservations/reservations";
+import { listSavedPlaces, SavedPlaceStatus } from "../services/places/savedPlaces";
+import { getActiveTripId } from "../services/platform/users";
+import { formatGmailContextLine, listAccounts } from "../services/gmail/gmailAccounts";
 import {
   formatGmailSearchSessionContext,
   getGmailSearchSession,
-} from "../services/gmailSearchSession";
+} from "../services/gmail/gmailSearchSession";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
@@ -105,7 +105,7 @@ function fromDateTime(value: Date | null | undefined): string | null {
 }
 
 async function savedPlacesContextLines(telegramId: number): Promise<string[]> {
-  const savedPlaces = await listSavedPlaces(telegramId, { status: "want_to_visit", limit: 8 });
+  const savedPlaces = await listSavedPlaces(telegramId, { status: SavedPlaceStatus.WantToVisit, limit: 8 });
   if (savedPlaces.length === 0) return [];
   return [
     "\nGeneral interesting places:",
