@@ -10,11 +10,17 @@ set -euo pipefail
 
 cd "$REMOTE_APP_DIR"
 
-# Probe passwordless sudo with commands allowed by deploy sudoers.
-sudo_probe() {
-  sudo -n mkdir -p /etc/nginx/snippets >/dev/null 2>&1 || \
-    sudo -n systemctl --version >/dev/null 2>&1 || \
-    sudo -n cp --version >/dev/null 2>&1
+NGINX_BIN=""
+resolve_nginx_bin() {
+  if command -v nginx >/dev/null 2>&1; then
+    NGINX_BIN="$(command -v nginx)"
+  elif [ -x /usr/sbin/nginx ]; then
+    NGINX_BIN="/usr/sbin/nginx"
+  fi
+}
+
+sudo_can() {
+  sudo -n "$@" >/dev/null 2>&1
 }
 
 is_interactive_deploy() {
@@ -22,10 +28,56 @@ is_interactive_deploy() {
     [ "${CI:-}" != true ] && [ "${GITHUB_ACTIONS:-}" != true ]
 }
 
+# All passwordless sudo commands used during deploy must pass (not just one).
+passwordless_sudo_ready() {
+  sudo_can mkdir -p /etc/nginx/snippets || return 1
+  sudo_can cp --version || return 1
+  sudo_can systemctl --version || return 1
+  if [ "${SKIP_NGINX_WEB:-}" != "1" ]; then
+    resolve_nginx_bin
+    if [ -n "$NGINX_BIN" ]; then
+      sudo_can "$NGINX_BIN" -t || return 1
+    fi
+  fi
+  return 0
+}
+
+USE_PASSWORDLESS_SUDO=false
+
+sudo_run() {
+  if [ "$USE_PASSWORDLESS_SUDO" = true ]; then
+    sudo -n "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+report_passwordless_sudo_failure() {
+  echo "[remote] ERROR: passwordless sudo is required for non-interactive deploy (CI)." >&2
+  echo "[remote] Running as: $(whoami) (expected deploy user: ${DEPLOY_USER})" >&2
+  echo "[remote] sudo -n mkdir -p /etc/nginx/snippets:" >&2
+  sudo -n mkdir -p /etc/nginx/snippets 2>&1 >&2 || true
+  echo "[remote] sudo -n cp --version:" >&2
+  sudo -n cp --version 2>&1 >&2 || true
+  echo "[remote] sudo -n systemctl --version:" >&2
+  sudo -n systemctl --version 2>&1 >&2 || true
+  resolve_nginx_bin
+  if [ -n "$NGINX_BIN" ] && [ "${SKIP_NGINX_WEB:-}" != "1" ]; then
+    echo "[remote] sudo -n ${NGINX_BIN} -t:" >&2
+    sudo -n "$NGINX_BIN" -t 2>&1 >&2 || true
+  fi
+  echo "[remote] Fix: create /etc/sudoers.d/${DEPLOY_USER}-deploy with NOPASSWD for cp, mkdir, systemctl, journalctl, nginx." >&2
+  echo "[remote] The username in sudoers must match DEPLOY_USER exactly. See README.md (GitHub Actions CI/CD)." >&2
+}
+
 # Reuse one sudo authentication for nginx/systemd steps (avoids repeated password prompts).
 start_sudo_keepalive() {
   while true; do
-    sudo_probe || exit
+    if [ "$USE_PASSWORDLESS_SUDO" = true ]; then
+      passwordless_sudo_ready || exit
+    else
+      sudo -n true || exit
+    fi
     sleep 50
     kill -0 "$$" || exit
   done 2>/dev/null &
@@ -33,37 +85,18 @@ start_sudo_keepalive() {
   trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null' EXIT
 }
 
-if ! sudo_probe; then
-  if [ -n "${DEPLOY_PASSWORD:-}" ]; then
-    printf '%s\n' "$DEPLOY_PASSWORD" | sudo -S -v
-    start_sudo_keepalive
-  elif is_interactive_deploy; then
-    echo "[remote] sudo required for nginx/systemd setup (enter password once)..."
-    sudo -v
-    start_sudo_keepalive
-  else
-    echo "[remote] ERROR: passwordless sudo is required for non-interactive deploy (CI)." >&2
-    echo "[remote] Running as: $(whoami) (expected deploy user: ${DEPLOY_USER})" >&2
-    echo "[remote] sudo -n mkdir -p /etc/nginx/snippets:" >&2
-    sudo -n mkdir -p /etc/nginx/snippets 2>&1 >&2 || true
-    echo "[remote] sudo -n systemctl --version:" >&2
-    sudo -n systemctl --version 2>&1 >&2 || true
-    echo "[remote] sudo -n cp --version:" >&2
-    sudo -n cp --version 2>&1 >&2 || true
-    NGINX_BIN=""
-    if command -v nginx >/dev/null 2>&1; then
-      NGINX_BIN="$(command -v nginx)"
-    elif [ -x /usr/sbin/nginx ]; then
-      NGINX_BIN="/usr/sbin/nginx"
-    fi
-    if [ -n "$NGINX_BIN" ]; then
-      echo "[remote] sudo -n ${NGINX_BIN} -t:" >&2
-      sudo -n "$NGINX_BIN" -t 2>&1 >&2 || true
-    fi
-    echo "[remote] Fix: create /etc/sudoers.d/${DEPLOY_USER}-deploy with NOPASSWD for cp, mkdir, systemctl, journalctl, nginx." >&2
-    echo "[remote] The username in sudoers must match DEPLOY_USER exactly. See README.md (GitHub Actions CI/CD)." >&2
-    exit 1
-  fi
+if passwordless_sudo_ready; then
+  USE_PASSWORDLESS_SUDO=true
+elif [ -n "${DEPLOY_PASSWORD:-}" ]; then
+  printf '%s\n' "$DEPLOY_PASSWORD" | sudo -S -v
+  start_sudo_keepalive
+elif is_interactive_deploy; then
+  echo "[remote] sudo required for nginx/systemd setup (enter password once)..."
+  sudo -v
+  start_sudo_keepalive
+else
+  report_passwordless_sudo_failure
+  exit 1
 fi
 
 echo "[remote] verifying static web pages..."
@@ -80,8 +113,8 @@ else
   echo "[remote] installing nginx snippet for /trip-planner/..."
   TMP_SNIPPET="$(mktemp)"
   sed -e "s#__APP_DIR__#${REMOTE_APP_DIR}#g" deploy/nginx/trip-planner-static.conf > "$TMP_SNIPPET"
-  sudo mkdir -p /etc/nginx/snippets
-  sudo cp "$TMP_SNIPPET" /etc/nginx/snippets/crea-trip-planner-static.conf
+  sudo_run mkdir -p /etc/nginx/snippets
+  sudo_run cp "$TMP_SNIPPET" /etc/nginx/snippets/crea-trip-planner-static.conf
   rm -f "$TMP_SNIPPET"
 
   echo "[remote] installing nginx snippet for /trip-planner/oauth/ (HTTP_PORT from .env)..."
@@ -94,17 +127,12 @@ else
   fi
   TMP_OAUTH="$(mktemp)"
   sed -e "s#__HTTP_PORT__#${HTTP_PORT}#g" deploy/nginx/trip-planner-oauth.conf > "$TMP_OAUTH"
-  sudo cp "$TMP_OAUTH" /etc/nginx/snippets/crea-trip-planner-oauth.conf
+  sudo_run cp "$TMP_OAUTH" /etc/nginx/snippets/crea-trip-planner-oauth.conf
   rm -f "$TMP_OAUTH"
   echo "[remote] OAuth proxy targets 127.0.0.1:${HTTP_PORT} — ensure HTTPS server block includes:"
   echo "[remote]   include /etc/nginx/snippets/crea-trip-planner-oauth.conf;"
 
-  NGINX_BIN=""
-  if command -v nginx >/dev/null 2>&1; then
-    NGINX_BIN="$(command -v nginx)"
-  elif [ -x /usr/sbin/nginx ]; then
-    NGINX_BIN="/usr/sbin/nginx"
-  fi
+  resolve_nginx_bin
 
   if ! grep -rq "crea-trip-planner-oauth.conf" /etc/nginx 2>/dev/null; then
     echo "[remote] WARN: crea-trip-planner-oauth.conf is NOT included in any nginx config."
@@ -112,10 +140,10 @@ else
   fi
 
   if [ -n "$NGINX_BIN" ]; then
-    if sudo "$NGINX_BIN" -t 2>/dev/null; then
-      if sudo systemctl reload nginx 2>/dev/null; then
+    if sudo_run "$NGINX_BIN" -t 2>/dev/null; then
+      if sudo_run systemctl reload nginx 2>/dev/null; then
         echo "[remote] nginx reloaded."
-      elif sudo "$NGINX_BIN" -s reload 2>/dev/null; then
+      elif sudo_run "$NGINX_BIN" -s reload 2>/dev/null; then
         echo "[remote] nginx reloaded (nginx -s reload)."
       else
         echo "[remote] WARN: nginx config OK but reload failed. Reload nginx manually."
@@ -162,14 +190,14 @@ TMP_UNIT="$(mktemp)"
 sed -e "s#__USER__#${DEPLOY_USER}#g" \
     -e "s#__APP_DIR__#${REMOTE_APP_DIR}#g" \
     deploy/telegram-trip-planner.service > "$TMP_UNIT"
-sudo cp "$TMP_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"
+sudo_run cp "$TMP_UNIT" "/etc/systemd/system/${SERVICE_NAME}.service"
 rm -f "$TMP_UNIT"
 
-sudo systemctl daemon-reload
-sudo systemctl enable "${SERVICE_NAME}"
-sudo systemctl restart "${SERVICE_NAME}"
+sudo_run systemctl daemon-reload
+sudo_run systemctl enable "${SERVICE_NAME}"
+sudo_run systemctl restart "${SERVICE_NAME}"
 
 echo "[remote] service status:"
-sudo systemctl --no-pager --full status "${SERVICE_NAME}" || true
+sudo_run systemctl --no-pager --full status "${SERVICE_NAME}" || true
 echo "[remote] recent logs:"
-sudo journalctl -u "${SERVICE_NAME}" -n 30 --no-pager || true
+sudo_run journalctl -u "${SERVICE_NAME}" -n 30 --no-pager || true
