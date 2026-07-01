@@ -139,7 +139,8 @@ if ! ssh_cmd "$SSH_TARGET" "test -f '${REMOTE_APP_DIR}/.env'"; then
   warn "Create it on the server (copy .env.example) before the service can start."
 fi
 
-# 7. Remote bootstrap: containers, build, migrate, systemd. Needs a tty for sudo.
+# 7. Remote bootstrap: containers, build, migrate, systemd.
+#    Use -tt only when DEPLOY_PASSWORD is set (sudo password prompt). Passwordless CI deploy needs no TTY.
 #    Do not pipe the remote script on stdin — that prevents ssh -t from allocating a TTY.
 log "Running remote build & service setup..."
 REMOTE_SCRIPT="${REMOTE_APP_DIR}/scripts/deploy-remote.sh"
@@ -152,7 +153,18 @@ REMOTE_ENV=(
 if [ -n "${DEPLOY_PASSWORD:-}" ]; then
   REMOTE_ENV+=("DEPLOY_PASSWORD=$(printf '%q' "$DEPLOY_PASSWORD")")
 fi
-ssh_cmd -tt "$SSH_TARGET" \
-  "${REMOTE_ENV[*]} bash $(printf '%q' "$REMOTE_SCRIPT")"
+if [ "${CI:-}" = true ]; then
+  REMOTE_ENV+=("CI=true")
+fi
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+  REMOTE_ENV+=("GITHUB_ACTIONS=true")
+fi
+if [ -n "${DEPLOY_PASSWORD:-}" ]; then
+  ssh_cmd -tt "$SSH_TARGET" \
+    "${REMOTE_ENV[*]} bash $(printf '%q' "$REMOTE_SCRIPT")"
+else
+  ssh_cmd "$SSH_TARGET" \
+    "${REMOTE_ENV[*]} bash $(printf '%q' "$REMOTE_SCRIPT")"
+fi
 
 ok "Deploy complete."

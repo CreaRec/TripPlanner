@@ -165,6 +165,63 @@ is used). For zero prompts, use SSH keys and passwordless sudo for the deploy us
 
 Make sure `.env` exists in `REMOTE_APP_DIR` on the server (the deploy script never overwrites it).
 
+### GitHub Actions CI/CD
+
+Merging into `main` triggers an automatic deploy to the production server via [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml).
+
+**On every push and pull request:** the `test` job runs `npm ci`, `npm run generate`, and `npm test`.
+
+**On push to `main` only:** the `deploy` job runs after tests pass. GitHub Actions sets `CI=true` on the runner; `scripts/deploy.sh` forwards `CI`/`GITHUB_ACTIONS` to the remote script and skips forced TTY (`-tt`) when `DEPLOY_PASSWORD` is unset. The workflow then:
+
+1. Writes the deploy SSH private key from GitHub Secrets
+2. Opens an SSH ControlMaster socket authenticated with that key
+3. Calls `./scripts/deploy.sh --remote`, which reuses the existing socket for rsync and remote build/restart
+
+Required GitHub Secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Purpose |
+|--------|---------|
+| `DEPLOY_SSH_KEY` | Private deploy key (matching the public key in server `authorized_keys`) |
+| `DEPLOY_HOST` | Server hostname, for example `crearec.app` |
+| `DEPLOY_USER` | SSH user, for example `crearec` |
+
+**Server prerequisites for CI deploy** (one-time setup):
+
+- Public deploy key in `~/.ssh/authorized_keys` for the deploy user
+- Passwordless sudo for deploy commands. **The sudoers username must match `DEPLOY_USER` in GitHub Secrets exactly** (for example `crearec`).
+
+  On the server, as a user with sudo access, run:
+
+  ```sh
+  DEPLOY_USER=crearec   # must match GitHub secret DEPLOY_USER
+  command -v cp mkdir systemctl journalctl nginx
+
+  sudo tee "/etc/sudoers.d/${DEPLOY_USER}-deploy" > /dev/null <<EOF
+  ${DEPLOY_USER} ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/cp, /bin/mkdir, /usr/bin/mkdir, /bin/systemctl, /usr/bin/systemctl, /usr/bin/journalctl, /usr/sbin/nginx, /usr/bin/nginx
+  EOF
+  sudo chmod 440 "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+  sudo visudo -c -f "/etc/sudoers.d/${DEPLOY_USER}-deploy"
+  ```
+
+  Then verify **as the deploy user** (not root), with no password prompt:
+
+  ```sh
+  sudo -n systemctl status telegram-trip-planner
+  sudo -n nginx -t
+  ```
+
+  If those fail, check: wrong username in sudoers, file permissions not `440`, or binary paths differ from `command -v` output. For a home server, a broader rule also works:
+
+  ```
+  crearec ALL=(ALL) NOPASSWD: ALL
+  ```
+
+- Node.js 20+ and npm on the server
+- Deploy user in the `docker` group (for `docker compose up -d`)
+- Remote `.env` in `REMOTE_APP_DIR` (deploy never overwrites it)
+
+`DEPLOY_PASSWORD` is not used in CI. The workflow never overwrites `.env` on the server.
+
 ## Project layout
 
 ```
