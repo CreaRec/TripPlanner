@@ -47,10 +47,11 @@ require_docker() {
   ok "Docker daemon is running."
 }
 
-# Bring up the compose stack (idempotent) and wait until the db is healthy.
+# Bring up Postgres only (idempotent) and wait until healthy.
+# Do not start the production `bot` service during local development.
 ensure_containers() {
-  log "Ensuring containers are up..."
-  compose up -d
+  log "Ensuring Postgres container is up..."
+  compose up -d db
   wait_db_healthy
 }
 

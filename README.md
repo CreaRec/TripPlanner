@@ -12,7 +12,7 @@ layer. Vector inserts and similarity search use raw SQL because pgvector columns
 `Unsupported` in Prisma's typed client.
 
 ```
-Telegram  <->  Bot/Agent (Node + TS + Prisma)  <->  Postgres + pgvector (Docker)
+Telegram  <->  Bot/Agent (Docker / local Node)  <->  Postgres + pgvector (Docker)
                       |
                       +-->  OpenAI API (chat + embeddings)
                       +-->  Google Places API (optional place enrichment)
@@ -64,7 +64,7 @@ Minimal IAM policy for the export bucket:
 
 1. In Google Cloud: enable **Gmail API**, add scope `https://www.googleapis.com/auth/gmail.readonly` on the OAuth consent screen, create an OAuth **Web** client with redirect URI `https://<your-domain>/trip-planner/oauth/google/callback`.
 2. Set in `.env`: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`, `PUBLIC_APP_URL`, `OAUTH_TOKEN_ENCRYPTION_KEY` (`openssl rand -hex 32`), `HTTP_PORT` (default `3000`).
-3. In your HTTPS nginx `server { }` block include both snippets (deploy installs them under `/etc/nginx/snippets/`):
+3. In your HTTPS nginx `server { }` block include both snippets (install manually from [`deploy/nginx/`](deploy/nginx/) under `/etc/nginx/snippets/`):
 
    ```nginx
    include /etc/nginx/snippets/crea-trip-planner-static.conf;
@@ -76,9 +76,9 @@ Minimal IAM policy for the export bucket:
 
 While the OAuth app is in **Testing**, add each Google account email under **Test users** in Google Cloud.
 
-Email export renders the message HTML to PDF via system Chromium and also sends separate file attachments to Telegram (inline images stay in the PDF only). Attachments larger than 10 MB are skipped with a notice to open them in Gmail. On the server install `chromium` (Debian: `sudo apt install chromium`) and set `CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium` if needed. Remote images in the email body require outbound network during render.
+Email export renders the message HTML to PDF via Chromium and also sends separate file attachments to Telegram (inline images stay in the PDF only). Attachments larger than 10 MB are skipped with a notice to open them in Gmail. Production Docker image includes Chromium (`CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium`). For local native runs, install `chromium` (Debian: `sudo apt install chromium`) if needed. Remote images in the email body require outbound network during render.
 
-Smoke test on the server:
+Smoke test (host Chromium or inside the bot container):
 
 ```bash
 chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
@@ -120,9 +120,7 @@ chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/start-local.sh` | Local dev: bring up Docker Postgres, generate client, migrate, run the bot with reload. |
-| `scripts/start-server.sh` | On the server: verify Docker, ensure the DB container is healthy, run `prisma migrate deploy`. The bot itself is managed by systemd. |
-| `scripts/deploy.sh` | Run tests locally, then sync the project to the Debian server, build (incl. `prisma generate`), migrate, install/restart the `telegram-trip-planner` systemd service. Aborts if tests fail. |
+| `scripts/start-local.sh` | Local dev: bring up Docker Postgres only, generate client, migrate, run the bot with reload. |
 
 ## Tests
 
@@ -139,45 +137,25 @@ Tests are colocated as `src/**/*.test.ts` and are excluded from the production `
 ## Persistence
 
 PostgreSQL data is bind-mounted to `./data/postgres`, so `docker compose down` and container
-recreation never wipe the database. When S3 is configured, generated exports are stored in the
-bucket; otherwise they are written under `./data/exports` (also used as a temp staging area).
-The whole `data/` directory is gitignored.
+recreation never wipe the database. **Never** run `docker compose down -v` or change the volume path
+on the server. When S3 is configured, generated exports are stored in the bucket; otherwise they
+are written under `./data/exports` (also used as a temp staging area). The whole `data/` directory
+is gitignored.
 
-## Deployment (Debian server)
+## Deployment
 
-The bot runs as a native **systemd** service (`telegram-trip-planner`); only Postgres runs in Docker.
+Production is Docker Compose (`db` + `bot`) with the bot image from GHCR. Releases are **only** via
+GitHub Actions on merge/push to `main` — there is no local deploy script.
 
-```bash
-# from your dev machine
-SERVER_HOST=192.168.1.135 SSH_USER=crearec ./scripts/deploy.sh
-```
-
-Override any of: `SERVER_HOST`, `SSH_USER`, `REMOTE_APP_DIR`, `SERVICE_NAME`.
-
-Set optional `DEPLOY_PASSWORD` in local `.env` (or export it) to skip SSH/sudo prompts during
-deploy; you need `sshpass` installed locally. When `DEPLOY_PASSWORD` is unset, deploy asks for
-passwords interactively.
-
-The deploy script reuses one SSH connection and one `sudo` session on the server, so you should
-only be prompted for the server login password once and the sudo password once (if password auth
-is used). For zero prompts, use SSH keys and passwordless sudo for the deploy user, or
-`DEPLOY_PASSWORD` with `sshpass`.
-
-Make sure `.env` exists in `REMOTE_APP_DIR` on the server (the deploy script never overwrites it).
+See [`docs/docker.md`](docs/docker.md) for GHCR bootstrap, server checklist (existing `crea-trip-planner-db`), and day-to-day ops.
 
 ### GitHub Actions CI/CD
 
-Merging into `main` triggers an automatic deploy to the production server via [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml).
+**On every push and pull request:** `test` runs `npm ci`, `npm run generate`, `npm test`, and a Docker image build (no push).
 
-**On every push and pull request:** the `test` job runs `npm ci`, `npm run generate`, and `npm test`.
+**On push to `main` only:** `publish` pushes `ghcr.io/crearec/crea-trip-planner:main` and `:sha-<short>`, then `deploy` copies `docker-compose.yml` over SSH, updates `IMAGE_TAG`, and runs `docker compose pull && up -d`.
 
-**On push to `main` only:** the `deploy` job runs after tests pass. GitHub Actions sets `CI=true` on the runner; `scripts/deploy.sh` forwards `CI`/`GITHUB_ACTIONS` to the remote script and skips forced TTY (`-tt`) when `DEPLOY_PASSWORD` is unset. The workflow then:
-
-1. Writes the deploy SSH private key from GitHub Secrets
-2. Opens an SSH ControlMaster socket authenticated with that key
-3. Calls `./scripts/deploy.sh --remote`, which reuses the existing socket for rsync and remote build/restart
-
-Required GitHub Secrets (Settings → Secrets and variables → Actions):
+Required GitHub Secrets:
 
 | Secret | Purpose |
 |--------|---------|
@@ -185,47 +163,13 @@ Required GitHub Secrets (Settings → Secrets and variables → Actions):
 | `DEPLOY_HOST` | Server hostname, for example `crearec.app` |
 | `DEPLOY_USER` | SSH user, for example `crearec` |
 
-**Server prerequisites for CI deploy** (one-time setup):
-
-- Public deploy key in `~/.ssh/authorized_keys` for the deploy user
-- Passwordless sudo for deploy commands. **The sudoers username must match `DEPLOY_USER` in GitHub Secrets exactly** (for example `crearec`).
-
-  On the server, as a user with sudo access, run:
-
-  ```sh
-  DEPLOY_USER=crearec   # must match GitHub secret DEPLOY_USER
-  command -v cp mkdir systemctl journalctl nginx
-
-  sudo tee "/etc/sudoers.d/${DEPLOY_USER}-deploy" > /dev/null <<EOF
-  ${DEPLOY_USER} ALL=(ALL) NOPASSWD: /bin/cp, /usr/bin/cp, /bin/mkdir, /usr/bin/mkdir, /bin/systemctl, /usr/bin/systemctl, /usr/bin/journalctl, /usr/sbin/nginx, /usr/bin/nginx
-  EOF
-  sudo chmod 440 "/etc/sudoers.d/${DEPLOY_USER}-deploy"
-  sudo visudo -c -f "/etc/sudoers.d/${DEPLOY_USER}-deploy"
-  ```
-
-  Then verify **as the deploy user** (not root), with no password prompt:
-
-  ```sh
-  sudo -n systemctl status telegram-trip-planner
-  sudo -n nginx -t
-  ```
-
-  If those fail, check: wrong username in sudoers, file permissions not `440`, or binary paths differ from `command -v` output. For a home server, a broader rule also works:
-
-  ```
-  crearec ALL=(ALL) NOPASSWD: ALL
-  ```
-
-- Node.js 20+ and npm on the server
-- Deploy user in the `docker` group (for `docker compose up -d`)
-- Remote `.env` in `REMOTE_APP_DIR` (deploy never overwrites it)
-
-`DEPLOY_PASSWORD` is not used in CI. The workflow never overwrites `.env` on the server.
+Server needs Docker Compose for the deploy user and a private GHCR login. Existing `.env` and `data/postgres` are reused; CI never overwrites secrets except `IMAGE_TAG`.
 
 ## Project layout
 
 ```
-docker-compose.yml          Postgres + pgvector service
+docker-compose.yml          Postgres + bot (GHCR image)
+Dockerfile                  Multi-stage Node 22 bot image
 prisma/schema.prisma        Schema (source of truth) + vector extension
 prisma/migrations/          Committed Prisma migrations
 src/config.ts               Env loading/validation
@@ -236,7 +180,8 @@ src/http/                   OAuth HTTP server (public /trip-planner/oauth/google
 src/agent/                  system prompt, tools, agent loop, memory extraction
 src/bot/                    Telegraf bot
 src/index.ts                Entry point (bot + optional HTTP server)
-scripts/                    start-local, start-server, deploy, shared lib
-deploy/                     systemd unit + nginx snippets (static + oauth)
+scripts/                    start-local + shared lib
+deploy/nginx/               nginx snippets (static + oauth; install manually)
+docs/docker.md              Production Docker + GHCR guide
 web/                        public pages for Google OAuth branding
 ```

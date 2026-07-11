@@ -16,3 +16,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  bot:
+    image: ${IMAGE:-ghcr.io/crearec/crea-trip-planner}:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trip}:${POSTGRES_PASSWORD:-trip}@db:5432/${POSTGRES_DB:-tripplanner}?schema=public
+      DATA_DIR: /app/data/exports
+      CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-3000}:3000"
+    volumes:
+      - ./data/exports:/app/data/exports

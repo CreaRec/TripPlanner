@@ -16,7 +16,9 @@ Replace `<your-domain>` with the hostname that terminates HTTPS for your app (sa
 
 1. Ensure nginx is installed and you have an HTTPS `server { }` block for `<your-domain>`.
 
-2. Deploy the project at least once so the snippet exists on the server (see below), or copy [`deploy/nginx/trip-planner-static.conf`](../deploy/nginx/trip-planner-static.conf) manually with `__APP_DIR__` replaced by your app directory (default `/home/crearec/crea-trip-planner`).
+2. Copy the snippets from [`deploy/nginx/`](../deploy/nginx/) to `/etc/nginx/snippets/`:
+   - `trip-planner-static.conf` — replace `__APP_DIR__` with the deploy directory (default `/home/crearec/crea-trip-planner`). Static files still need a host checkout or copy of `web/` under that path (CI does not sync `web/`; copy manually when pages change).
+   - `trip-planner-oauth.conf` — replace `__HTTP_PORT__` with the bot HTTP port (default `3000`; Compose publishes `127.0.0.1:$HTTP_PORT:3000`).
 
 3. Inside your HTTPS `server { }`, add:
 
@@ -35,21 +37,7 @@ Replace `<your-domain>` with the hostname that terminates HTTPS for your app (sa
 
 The snippet only defines `location /trip-planner/`; it does not set `listen` or `server_name`. You keep control of TLS and vhost configuration.
 
-## Deploy automation
-
-[`scripts/deploy.sh`](../scripts/deploy.sh) rsyncs `web/` to the server on every deploy and, by default:
-
-- Verifies `web/trip-planner/index.html`, `privacy/index.html`, and `terms/index.html` exist on the server
-- Installs `/etc/nginx/snippets/crea-trip-planner-static.conf` with `REMOTE_APP_DIR` substituted for `__APP_DIR__`
-- Installs `/etc/nginx/snippets/crea-trip-planner-oauth.conf` with `HTTP_PORT` read from the server `.env` (default `3000`)
-- Runs `nginx -t` and reloads nginx when nginx is available (warnings only on failure; the bot deploy still completes)
-
-Environment variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `REMOTE_APP_DIR` | `/home/crearec/crea-trip-planner` | App root; used in the nginx `alias` path |
-| `SKIP_NGINX_WEB` | unset | Set to `1` to skip snippet install and nginx reload |
+See [`docs/docker.md`](../docs/docker.md) for production Compose / GHCR deployment.
 
 ## Customize before production
 
