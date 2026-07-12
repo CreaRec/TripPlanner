@@ -105,7 +105,7 @@ jobs:
           cd '${DEPLOY_DIR}'
 
           if [ ! -f .env ]; then
-            echo "ERROR: ${DEPLOY_DIR}/.env is missing. Create it from .env.example (app secrets + IMAGE, IMAGE_TAG)." >&2
+            echo "ERROR: ${DEPLOY_DIR}/.env is missing. Create it from .env.example (app secrets + IMAGE)." >&2
             exit 1
           fi
 
@@ -113,12 +113,8 @@ jobs:
             sudo systemctl disable --now telegram-trip-planner || true
           fi
 
-          if grep -q '^IMAGE_TAG=' .env; then
-            sed -i.bak "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" .env && rm -f .env.bak
-          else
-            printf '\nIMAGE_TAG=%s\n' "${IMAGE_TAG}" >> .env
-          fi
-
+          # Shell IMAGE_TAG overrides .env for compose interpolation; do not mutate secrets.
+          export IMAGE_TAG='${IMAGE_TAG}'
           docker compose pull
           docker compose up -d
           docker compose ps

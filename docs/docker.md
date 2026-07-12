@@ -11,9 +11,9 @@ Deploy directory: `/home/crearec/crea-trip-planner`
 1. Merge or push to `main`.
 2. Actions runs tests and builds the image.
 3. Actions pushes tags `main` and `sha-<short>` to GHCR.
-4. Actions copies `docker-compose.yml` to the server, sets `IMAGE_TAG`, then runs `docker compose pull && docker compose up -d`.
+4. Actions copies `docker-compose.yml` to the server, exports `IMAGE_TAG` in the SSH session (overrides `.env` for Compose interpolation), then runs `docker compose pull && docker compose up -d`.
 
-App secrets stay on the server in `.env`. Postgres data stays in `./data/postgres`. Exports use `./data/exports`. CI never overwrites `.env` except `IMAGE_TAG`, and never touches Postgres volumes.
+App secrets stay on the server in `.env`. Postgres data stays in `./data/postgres`. Exports use `./data/exports`. CI never mutates `.env` and never touches Postgres volumes.
 
 On container start the bot entrypoint runs `prisma migrate deploy`, then `node dist/index.js`.
 

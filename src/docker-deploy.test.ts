@@ -26,10 +26,13 @@ describe("docker deploy contract", () => {
 
     expect(workflow).toMatch(/packages:\s*write/);
     expect(workflow).toMatch(/ghcr\.io\/crearec\/crea-trip-planner/);
+    expect(workflow).toMatch(/export IMAGE_TAG=/);
     expect(workflow).toMatch(/docker compose pull/);
     expect(workflow).toMatch(/docker compose up -d/);
     expect(workflow).toMatch(/docker-compose\.yml/);
     expect(workflow).toMatch(/telegram-trip-planner/);
+    expect(workflow).not.toMatch(/sed -i/);
     expect(workflow).not.toMatch(/scripts\/deploy\.sh/);
   });
 });
+

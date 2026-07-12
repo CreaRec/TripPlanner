@@ -153,7 +153,7 @@ See [`docs/docker.md`](docs/docker.md) for GHCR bootstrap, server checklist (exi
 
 **On every push and pull request:** `test` runs `npm ci`, `npm run generate`, `npm test`, and a Docker image build (no push).
 
-**On push to `main` only:** `publish` pushes `ghcr.io/crearec/crea-trip-planner:main` and `:sha-<short>`, then `deploy` copies `docker-compose.yml` over SSH, updates `IMAGE_TAG`, and runs `docker compose pull && up -d`.
+**On push to `main` only:** `publish` pushes `ghcr.io/crearec/crea-trip-planner:main` and `:sha-<short>`, then `deploy` copies `docker-compose.yml` over SSH, exports `IMAGE_TAG` for Compose, and runs `docker compose pull && up -d`.
 
 Required GitHub Secrets:
 
@@ -163,7 +163,7 @@ Required GitHub Secrets:
 | `DEPLOY_HOST` | Server hostname, for example `crearec.app` |
 | `DEPLOY_USER` | SSH user, for example `crearec` |
 
-Server needs Docker Compose for the deploy user and a private GHCR login. Existing `.env` and `data/postgres` are reused; CI never overwrites secrets except `IMAGE_TAG`.
+Server needs Docker Compose for the deploy user and a private GHCR login. Existing `.env` and `data/postgres` are reused; CI never mutates `.env`.
 
 ## Project layout
 
