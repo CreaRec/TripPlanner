@@ -5,7 +5,7 @@
   "description": "Local-first AI travel planning agent with a Telegram bot frontend.",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

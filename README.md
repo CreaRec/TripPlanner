@@ -53,7 +53,7 @@ Minimal IAM policy for the export bucket:
 
 ## Requirements
 
-- Node.js >= 20
+- Node.js >= 24
 - Docker + Docker Compose
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - An OpenAI API key
@@ -169,7 +169,7 @@ Server needs Docker Compose for the deploy user and a private GHCR login. Existi
 
 ```
 docker-compose.yml          Postgres + bot (GHCR image)
-Dockerfile                  Multi-stage Node 22 bot image
+Dockerfile                  Multi-stage Node 24 bot image
 prisma/schema.prisma        Schema (source of truth) + vector extension
 prisma/migrations/          Committed Prisma migrations
 src/config.ts               Env loading/validation

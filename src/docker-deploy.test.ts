@@ -26,6 +26,7 @@ describe("docker deploy contract", () => {
 
     expect(workflow).toMatch(/packages:\s*write/);
     expect(workflow).toMatch(/ghcr\.io\/crearec\/crea-trip-planner/);
+    expect(workflow).toMatch(/node-version:\s*"24"/);
     expect(workflow).toMatch(/export IMAGE_TAG=/);
     expect(workflow).toMatch(/docker compose pull/);
     expect(workflow).toMatch(/docker compose up -d/);
@@ -33,6 +34,13 @@ describe("docker deploy contract", () => {
     expect(workflow).toMatch(/telegram-trip-planner/);
     expect(workflow).not.toMatch(/sed -i/);
     expect(workflow).not.toMatch(/scripts\/deploy\.sh/);
+  });
+
+  it("Dockerfile uses Node 24 bookworm-slim for build and runtime", async () => {
+    const dockerfile = await readFile(path.join(repoRoot, "Dockerfile"), "utf8");
+
+    expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim AS build$/m);
+    expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim AS runtime$/m);
   });
 });
 
