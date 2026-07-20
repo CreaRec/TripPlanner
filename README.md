@@ -153,15 +153,17 @@ See [`docs/docker.md`](docs/docker.md) for GHCR bootstrap, server checklist (exi
 
 **On every push and pull request:** `test` runs `npm ci`, `npm run generate`, `npm test`, and a Docker image build (no push).
 
-**On push to `main` only:** `publish` pushes `ghcr.io/crearec/crea-trip-planner:main` and `:sha-<short>`, then `deploy` copies `docker-compose.yml` over SSH, exports `IMAGE_TAG` for Compose, and runs `docker compose pull && up -d`.
+**On push to `main` only:** `publish` pushes `ghcr.io/crearec/crea-trip-planner:main` and `:sha-<short>`, then `deploy` joins Tailscale (`tag:ci`), copies `docker-compose.yml` over SSH, exports `IMAGE_TAG` for Compose, and runs `docker compose pull && up -d`.
 
 Required GitHub Secrets:
 
 | Secret | Purpose |
 |--------|---------|
 | `DEPLOY_SSH_KEY` | Private deploy key (matching the public key in server `authorized_keys`) |
-| `DEPLOY_HOST` | Server hostname, for example `crearec.app` |
+| `DEPLOY_HOST` | Tailscale IP or MagicDNS hostname (for example `100.118.169.52`) |
 | `DEPLOY_USER` | SSH user, for example `crearec` |
+| `TS_OAUTH_CLIENT_ID` | Tailscale OAuth client ID (Trust credentials) for ephemeral CI nodes |
+| `TS_OAUTH_SECRET` | Tailscale OAuth client secret (Trust credentials) |
 
 Server needs Docker Compose for the deploy user and a private GHCR login. Existing `.env` and `data/postgres` are reused; CI never mutates `.env`.
 
