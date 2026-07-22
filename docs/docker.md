@@ -73,6 +73,26 @@ Check Portainer (stack `crea-trip-planner` should show `crea-trip-planner-db` pl
 
 After the bot is stable, remove host `node_modules` / `dist` / the old systemd unit. **Do not** remove or recreate `data/postgres`. Never run `docker compose down -v`.
 
+## Observability (OpenTelemetry → CreaGrafana)
+
+Production bot containers export traces, metrics, and logs via **OTLP HTTP** to Grafana Alloy on the external Docker network `lgtm`. Do not point the bot at Loki, Tempo, or Mimir directly.
+
+| Env | Production value |
+|-----|------------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://alloy:4318` |
+| `OTEL_SERVICE_NAME` | `crea-trip-planner` |
+| `OTEL_SERVICE_NAMESPACE` | `bots` |
+
+Compose joins the `bot` service to `lgtm` (external). Prerequisite (once per host, if CreaGrafana already created it): `docker network create lgtm`.
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset (local `npm run dev` / tests), the SDK does not start.
+
+Grafana Explore checks after deploy:
+
+- Loki: `{service_name="crea-trip-planner"}`
+- Tempo: search service `crea-trip-planner` / span `agent.handle`
+- Mimir: `messages_total`
+
 ## Day-to-day operations
 
 Deploy: merge to `main`.
@@ -99,7 +119,5 @@ docker compose restart bot
 Deploy joins the tailnet with `tag:ci` via [`tailscale/github-action`](https://github.com/tailscale/github-action), then SSHs to `DEPLOY_HOST`. Create the OAuth client under Tailscale **Settings → Trust credentials** (not legacy OAuth clients).
 
 GHCR push uses the workflow `GITHUB_TOKEN` (`packages: write`). No extra registry secret is required for publish.
-
-The deploy user needs Docker Compose without sudo, and passwordless sudo for `systemctl` only while the systemd unit is being retired.
 
 The deploy user needs Docker Compose without sudo, and passwordless sudo for `systemctl` only while the systemd unit is being retired.

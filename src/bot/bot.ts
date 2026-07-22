@@ -11,6 +11,9 @@ import {
 } from "../services/gmail/gmailIntents";
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
+import { Logger } from "../telemetry/logger";
+
+const log = new Logger("bot");
 
 async function sendAgentResult(
   ctx: {
@@ -31,7 +34,7 @@ async function sendAgentResult(
       }
     } catch (err) {
       failedFiles += 1;
-      console.error("[bot] failed to send file:", file, err);
+      log.error("failed to send file:", file, err);
     }
   }
 
@@ -73,7 +76,7 @@ async function replyDirectGmailExport(
       await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
       return true;
     }
-    console.error("[bot] direct gmail export failed:", result.message);
+    log.error("direct gmail export failed:", result.message);
     await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
     return true;
   }
@@ -84,7 +87,7 @@ async function replyDirectGmailExport(
       await ctx.replyWithDocument({ source: filePath });
     } catch (err) {
       failedFiles += 1;
-      console.error("[bot] failed to send exported gmail file:", filePath, err);
+      log.error("failed to send exported gmail file:", filePath, err);
     }
   }
 
@@ -137,13 +140,13 @@ export function createBot(): Telegraf {
   });
 
   bot.catch((err, ctx) => {
-    console.error("[bot] unhandled error:", err);
+    log.error("unhandled error:", err);
     const message =
       err instanceof Error && err.name === "TimeoutError"
         ? "Запрос занял слишком много времени. Попробуйте ещё раз."
         : "Something went wrong. Please try again.";
     void ctx.reply(message).catch((replyErr) => {
-      console.error("[bot] failed to send error reply:", replyErr);
+      log.error("failed to send error reply:", replyErr);
     });
   });
 
@@ -209,7 +212,7 @@ export function createBot(): Telegraf {
         ].join("\n"),
       );
     } catch (err) {
-      console.error("[bot] connect gmail error:", err);
+      log.error("connect gmail error:", err);
       await ctx.reply("Could not start Gmail connection. Please try again.");
     }
   }
@@ -235,7 +238,7 @@ export function createBot(): Telegraf {
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] image parsing error:", err);
+      log.error("image parsing error:", err);
       await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
     }
   });
@@ -263,7 +266,7 @@ export function createBot(): Telegraf {
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] image parsing error:", err);
+      log.error("image parsing error:", err);
       await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
     }
   });
@@ -286,7 +289,7 @@ export function createBot(): Telegraf {
         });
         if (handled) return;
       } catch (err) {
-        console.error("[bot] direct gmail export error:", err);
+        log.error("direct gmail export error:", err);
         await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
         return;
       }
@@ -300,7 +303,7 @@ export function createBot(): Telegraf {
       const result = await runAgent(ctx.from.id, text);
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] agent error:", err);
+      log.error("agent error:", err);
       await ctx.reply("Something went wrong while planning. Please try again.");
     } finally {
       clearInterval(typingTimer);

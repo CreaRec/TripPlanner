@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { SpanStatusCode, type Counter } from "@opentelemetry/api";
 import { config } from "../config";
 import { openai } from "../openai/client";
 import { getTrip } from "../services/trip/trips";
@@ -20,12 +21,38 @@ import {
   formatGmailSearchSessionContext,
   getGmailSearchSession,
 } from "../services/gmail/gmailSearchSession";
+import { Logger } from "../telemetry/logger";
+import { getMeter, getTracer } from "../telemetry/otel";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
 import { extractMemories } from "./memory";
 
 const MAX_TOOL_ITERATIONS = 8;
+
+const agentLog = new Logger("agent");
+const memoryLog = new Logger("memory");
+
+let messagesTotal: Counter | undefined;
+let agentToolCallsTotal: Counter | undefined;
+
+function getMessagesTotal(): Counter {
+  if (!messagesTotal) {
+    messagesTotal = getMeter().createCounter("messages_total", {
+      description: "Total agent message handles",
+    });
+  }
+  return messagesTotal;
+}
+
+function getAgentToolCallsTotal(): Counter {
+  if (!agentToolCallsTotal) {
+    agentToolCallsTotal = getMeter().createCounter("agent_tool_calls_total", {
+      description: "Total agent tool invocations",
+    });
+  }
+  return agentToolCallsTotal;
+}
 
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -213,7 +240,66 @@ export interface AgentResult {
   files: string[];
 }
 
-export async function runAgent(telegramId: number, userText: string): Promise<AgentResult> {
+async function runToolCall(
+  ctx: AgentContext,
+  toolName: string,
+  rawArgs: string | undefined,
+  options: {
+    userText: string;
+    pendingDeleteForTurn: PendingDestructiveAction | null;
+    activeTripId: number | null;
+  },
+): Promise<unknown> {
+  return getTracer().startActiveSpan("agent.tool", async (span) => {
+    span.setAttribute("tool.name", toolName);
+    const handler = toolHandlers[toolName];
+    if (!handler) {
+      getAgentToolCallsTotal().add(1, { tool: toolName, result: "error" });
+      span.setStatus({ code: SpanStatusCode.ERROR, message: "unknown tool" });
+      span.end();
+      return { error: `Unknown tool ${toolName}` };
+    }
+
+    try {
+      const args = rawArgs ? JSON.parse(rawArgs) : {};
+      let result: unknown;
+      if (DESTRUCTIVE_TOOL_NAMES.has(toolName)) {
+        const canDelete =
+          options.pendingDeleteForTurn &&
+          isDestructiveConfirmation(options.userText) &&
+          sameDestructiveAction(options.pendingDeleteForTurn, toolName, args);
+
+        if (!canDelete) {
+          const pendingAction = {
+            toolName,
+            args: destructiveArgsForComparison(args),
+          };
+          await savePendingDestructiveAction(ctx.telegramId, ctx.activeTripId, pendingAction);
+          result = confirmationRequiredResult(toolName, args);
+        } else {
+          result = await handler(ctx, { ...args, confirmed: true });
+          await clearPendingDestructiveAction(ctx.telegramId, options.activeTripId);
+        }
+      } else {
+        result = await handler(ctx, args);
+      }
+      getAgentToolCallsTotal().add(1, { tool: toolName, result: "success" });
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      agentLog.error("tool call failed", { tool: toolName, error: message });
+      if (err instanceof Error) span.recordException(err);
+      span.setStatus({ code: SpanStatusCode.ERROR, message });
+      getAgentToolCallsTotal().add(1, { tool: toolName, result: "error" });
+      return { error: message };
+    } finally {
+      span.end();
+    }
+  });
+}
+
+async function runAgentInner(telegramId: number, userText: string): Promise<AgentResult> {
   const activeTripId = await getActiveTripId(telegramId);
   const ctx: AgentContext = { telegramId, activeTripId, exports: [] };
   const pendingDelete = await getPendingDestructiveAction(telegramId, activeTripId);
@@ -225,7 +311,7 @@ export async function runAgent(telegramId: number, userText: string): Promise<Ag
     const reply = "Ок, не удаляю.";
     await saveMessage(telegramId, ctx.activeTripId, "assistant", reply);
     void extractMemories(telegramId, ctx.activeTripId, userText, reply).catch((err) =>
-      console.error("[memory] extraction failed:", err),
+      memoryLog.error("extraction failed:", err),
     );
     return { reply, files: [] };
   }
@@ -272,42 +358,11 @@ export async function runAgent(telegramId: number, userText: string): Promise<Ag
 
     for (const call of toolCalls) {
       if (call.type !== "function") continue;
-      const handler = toolHandlers[call.function.name];
-      let result: unknown;
-      if (!handler) {
-        result = { error: `Unknown tool ${call.function.name}` };
-      } else {
-        try {
-          const args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-          if (DESTRUCTIVE_TOOL_NAMES.has(call.function.name)) {
-            const canDelete =
-              pendingDeleteForTurn &&
-              isDestructiveConfirmation(userText) &&
-              sameDestructiveAction(pendingDeleteForTurn, call.function.name, args);
-
-            if (!canDelete) {
-              const pendingAction = {
-                toolName: call.function.name,
-                args: destructiveArgsForComparison(args),
-              };
-              await savePendingDestructiveAction(telegramId, ctx.activeTripId, pendingAction);
-              result = confirmationRequiredResult(call.function.name, args);
-            } else {
-              result = await handler(ctx, { ...args, confirmed: true });
-              await clearPendingDestructiveAction(telegramId, activeTripId);
-            }
-          } else {
-            result = await handler(ctx, args);
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error("[agent] tool call failed", {
-            tool: call.function.name,
-            error: message,
-          });
-          result = { error: message };
-        }
-      }
+      const result = await runToolCall(ctx, call.function.name, call.function.arguments, {
+        userText,
+        pendingDeleteForTurn,
+        activeTripId,
+      });
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -324,8 +379,29 @@ export async function runAgent(telegramId: number, userText: string): Promise<Ag
 
   // Fire-and-forget structured memory extraction (does not block the reply).
   void extractMemories(telegramId, ctx.activeTripId, userText, reply).catch((err) =>
-    console.error("[memory] extraction failed:", err),
+    memoryLog.error("extraction failed:", err),
   );
 
   return { reply, files: ctx.exports };
+}
+
+export async function runAgent(telegramId: number, userText: string): Promise<AgentResult> {
+  return getTracer().startActiveSpan("agent.handle", async (span) => {
+    try {
+      const result = await runAgentInner(telegramId, userText);
+      getMessagesTotal().add(1, { result: "success" });
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      getMessagesTotal().add(1, { result: "error" });
+      if (err instanceof Error) span.recordException(err);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
