@@ -16,6 +16,10 @@ import {
 } from "../services/gmail/gmailClient";
 import { upsertAccount } from "../services/gmail/gmailAccounts";
 import { buildOAuthStartUrl } from "../services/gmail/gmailUrls";
+import { Logger } from "../telemetry/logger";
+
+const oauthLog = new Logger("oauth");
+const httpLog = new Logger("http");
 
 function htmlPage(title: string, body: string): string {
   return `<!DOCTYPE html>
@@ -140,7 +144,7 @@ async function handleGoogleCallback(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[oauth] callback failed:", message);
+    oauthLog.error("callback failed:", message);
     sendHtml(
       res,
       500,
@@ -183,7 +187,7 @@ export function createHttpServer(): Server {
 
         sendText(res, 404, "Not found");
       } catch (err) {
-        console.error("[http] request failed:", err);
+        httpLog.error("request failed:", err);
         sendText(res, 500, "Internal server error");
       }
     })();

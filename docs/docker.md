@@ -87,6 +87,8 @@ Compose joins the `bot` service to `lgtm` (external). Prerequisite (once per hos
 
 When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset (local `npm run dev` / tests), the SDK does not start.
 
+All application logs go through `Logger` (`src/telemetry/logger.ts`): stdout for `docker compose logs`, and OTLP logs to Alloy/Loki when the SDK is running. Do not use raw `console.*` in app code.
+
 Grafana Explore checks after deploy:
 
 - Loki: `{service_name="crea-trip-planner"}`

@@ -20,7 +20,7 @@ async function main(): Promise<void> {
 
   if (config.allowedTelegramIds.length === 0) {
     log.warn(
-      "WARNING: ALLOWED_TELEGRAM_IDS is empty - the bot will respond to ANYONE. Set it in .env.",
+      "ALLOWED_TELEGRAM_IDS is empty - the bot will respond to ANYONE. Set it in .env.",
     );
   }
 

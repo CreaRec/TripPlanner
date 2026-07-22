@@ -1,5 +1,8 @@
 import { config, isExportStorageConfigured } from "../../config";
+import { Logger } from "../../telemetry/logger";
 import { deleteExportObjects, listExportObjects } from "./exportStorage";
+
+const log = new Logger("export-retention");
 
 export interface RetentionRunResult {
   deletedByAge: number;
@@ -77,14 +80,14 @@ export function scheduleExportRetention(
     void run()
       .then((result) => {
         if (result && (result.deletedByAge > 0 || result.deletedBySize > 0)) {
-          console.log(
-            `[export-retention] deleted ${result.deletedByAge} by age, ${result.deletedBySize} by size; ` +
+          log.info(
+            `deleted ${result.deletedByAge} by age, ${result.deletedBySize} by size; ` +
               `${result.remainingCount} objects (${Math.round(result.remainingBytes / (1024 * 1024))} MB) remain`,
           );
         }
       })
       .catch((err) => {
-        console.error("[export-retention] failed:", err);
+        log.error("failed:", err);
       });
   };
 

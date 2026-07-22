@@ -39,6 +39,8 @@ describe("telemetry/otel", () => {
 
     await startTelemetry();
     expect(isTelemetrySdkActive()).toBe(false);
-    expect(info).toHaveBeenCalledWith(expect.stringContaining("OTEL_SDK_DISABLED"));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining("OTEL_SDK_DISABLED"),
+    );
   });
 });

@@ -23,6 +23,7 @@ import {
 import type { SavedPlace } from "../../services/places/savedPlaces";
 import { suggestSavedPlacesOnRoute } from "../../services/providers/googleRoutes";
 import { generateRouteComparisonMap, isStaticMapsConfigured } from "../../services/providers/staticMaps";
+import { Logger } from "../../telemetry/logger";
 import type OpenAI from "openai";
 import type { ToolHandler } from "./context";
 import {
@@ -39,6 +40,8 @@ import {
   savedPlaceToToolResult,
   temporarySavedPlaceFromSearchResult,
 } from "./serializers";
+
+const staticMapsLog = new Logger("static-maps");
 
 export const placesToolDefinitions: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -623,7 +626,7 @@ export const placesToolHandlers: Record<string, ToolHandler> = {
             mapFiles.set(suggestion.place.id, file);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error("[static-maps] route comparison map failed", {
+            staticMapsLog.error("route comparison map failed", {
               placeId: suggestion.place.id,
               error: message,
             });

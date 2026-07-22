@@ -11,9 +11,11 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_NAMESPACE,
 } from "@opentelemetry/semantic-conventions";
+import { Logger } from "./logger";
 
 const TRACER_NAME = "crea-trip-planner";
 const METER_NAME = "crea-trip-planner";
+const log = new Logger("telemetry");
 
 let sdk: NodeSDK | null = null;
 let started = false;
@@ -32,15 +34,13 @@ export async function startTelemetry(): Promise<void> {
 
   const endpoint = readEndpoint();
   if (!endpoint) {
-    console.info(
-      "[telemetry] OTEL_EXPORTER_OTLP_ENDPOINT unset — OpenTelemetry SDK not started.",
-    );
+    log.info("OTEL_EXPORTER_OTLP_ENDPOINT unset — OpenTelemetry SDK not started.");
     started = true;
     return;
   }
 
   if (process.env.OTEL_SDK_DISABLED === "true") {
-    console.info("[telemetry] OTEL_SDK_DISABLED=true — OpenTelemetry SDK not started.");
+    log.info("OTEL_SDK_DISABLED=true — OpenTelemetry SDK not started.");
     started = true;
     return;
   }
@@ -73,10 +73,10 @@ export async function startTelemetry(): Promise<void> {
     });
     sdk.start();
     started = true;
-    console.info(`[telemetry] OpenTelemetry SDK started → ${endpoint}`);
+    log.info(`OpenTelemetry SDK started → ${endpoint}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn("[telemetry] failed to start OpenTelemetry SDK:", message);
+    log.warn("failed to start OpenTelemetry SDK:", message);
     sdk = null;
     started = true;
   }
@@ -90,7 +90,7 @@ export async function shutdownTelemetry(): Promise<void> {
     await active.shutdown();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn("[telemetry] shutdown failed:", message);
+    log.warn("shutdown failed:", message);
   }
 }
 
