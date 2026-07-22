@@ -10,6 +10,7 @@ import {
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_NAMESPACE,
+  ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 import { Logger } from "./logger";
 
@@ -27,6 +28,25 @@ function normalizeEndpoint(endpoint: string): string {
 function readEndpoint(): string | undefined {
   const raw = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
   return raw ? normalizeEndpoint(raw) : undefined;
+}
+
+function readServiceVersion(): string {
+  return (
+    process.env.OTEL_SERVICE_VERSION?.trim() ||
+    process.env.IMAGE_TAG?.trim() ||
+    process.env.npm_package_version?.trim() ||
+    "0.1.0"
+  );
+}
+
+function readDeploymentEnvironment(): string {
+  const explicit = process.env.OTEL_DEPLOYMENT_ENVIRONMENT?.trim();
+  if (explicit) return explicit;
+  const nodeEnv = process.env.NODE_ENV?.trim();
+  if (nodeEnv === "development" || nodeEnv === "test") return "local";
+  if (nodeEnv === "staging") return "staging";
+  if (nodeEnv === "production") return "production";
+  return nodeEnv || "production";
 }
 
 export async function startTelemetry(): Promise<void> {
@@ -47,11 +67,13 @@ export async function startTelemetry(): Promise<void> {
 
   const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || "crea-trip-planner";
   const serviceNamespace = process.env.OTEL_SERVICE_NAMESPACE?.trim() || "bots";
-  const deploymentEnvironment = process.env.NODE_ENV?.trim() || "production";
+  const deploymentEnvironment = readDeploymentEnvironment();
+  const serviceVersion = readServiceVersion();
 
   const resource = resources.resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
     [ATTR_SERVICE_NAMESPACE]: serviceNamespace,
+    [ATTR_SERVICE_VERSION]: serviceVersion,
     [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: deploymentEnvironment,
   });
 

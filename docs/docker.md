@@ -82,6 +82,8 @@ Production bot containers export traces, metrics, and logs via **OTLP HTTP** to 
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://alloy:4318` |
 | `OTEL_SERVICE_NAME` | `crea-trip-planner` |
 | `OTEL_SERVICE_NAMESPACE` | `bots` |
+| `OTEL_SERVICE_VERSION` | `${IMAGE_TAG}` (image tag) |
+| `OTEL_DEPLOYMENT_ENVIRONMENT` | `production` |
 
 Compose joins the `bot` service to `lgtm` (external). Prerequisite (once per host, if CreaGrafana already created it): `docker network create lgtm`.
 
@@ -91,18 +93,27 @@ All application logs go through `Logger` (`src/telemetry/logger.ts`): stdout for
 
 Request chain (one Telegram update → one `trace_id`):
 
-1. `bot.handle` — `request received` / `request completed`
-2. optional `vision` — image extract
-3. `agent.handle` — `handle start` → `llm request` / `llm tool calls` / `tool start`/`tool done` → `handle done`
-4. `bot` — `reply sent`
+1. `bot.handle_update` — `request received` / `request completed` + `bot_updates_total` / `bot_handler_duration_seconds`
+2. optional `bot.job.vision` — image extract
+3. `bot.job.agent` — `handle start` → `llm request` / `tool.call` → `handle done`
+4. optional `bot.job.gmail` — direct Gmail export
+5. `bot` — `reply sent`
 
-Correlate in Loki by `trace_id` (or `telegram_id`). Tempo spans: `bot.handle` → `agent.handle` → `agent.tool`.
+Correlate in Loki by `trace_id` (or `telegram_id`). Tempo spans: `bot.handle_update` → `bot.job.agent` / `bot.job.vision` / `bot.job.gmail`.
 
 Grafana Explore checks after deploy:
 
 - Loki: `{service_name="crea-trip-planner"}` (filter `| telegram_id=111` or by `trace_id`)
-- Tempo: search service `crea-trip-planner` / span `bot.handle` or `agent.handle`
-- Mimir: `messages_total`
+- Tempo: search service `crea-trip-planner` / span `bot.handle_update` or `bot.job.agent`
+- Mimir (fleet):
+
+```promql
+sum by (service_name) (rate(bot_updates_total{service_namespace="bots"}[5m]))
+```
+
+```promql
+sum by (service_name, result) (rate(bot_errors_total[5m]))
+```
 
 ## Day-to-day operations
 

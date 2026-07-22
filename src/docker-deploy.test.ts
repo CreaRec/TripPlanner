@@ -18,6 +18,8 @@ describe("docker deploy contract", () => {
     expect(compose).toMatch(/OTEL_EXPORTER_OTLP_ENDPOINT:\s*http:\/\/alloy:4318/);
     expect(compose).toMatch(/OTEL_SERVICE_NAME:\s*crea-trip-planner/);
     expect(compose).toMatch(/OTEL_SERVICE_NAMESPACE:\s*bots/);
+    expect(compose).toMatch(/OTEL_SERVICE_VERSION:\s*\$\{IMAGE_TAG:-main\}/);
+    expect(compose).toMatch(/OTEL_DEPLOYMENT_ENVIRONMENT:\s*production/);
     expect(compose).toMatch(/lgtm:\s*\n\s*external:\s*true/m);
     expect(compose).not.toMatch(/^\s*build:/m);
   });

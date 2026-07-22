@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { SpanStatusCode, type Counter } from "@opentelemetry/api";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { config } from "../config";
 import { openai } from "../openai/client";
 import { getTrip } from "../services/trip/trips";
@@ -21,8 +21,9 @@ import {
   formatGmailSearchSessionContext,
   getGmailSearchSession,
 } from "../services/gmail/gmailSearchSession";
+import { withJob } from "../telemetry/botMetrics";
 import { Logger } from "../telemetry/logger";
-import { getMeter, getTracer } from "../telemetry/otel";
+import { getTracer } from "../telemetry/otel";
 import { fromDate } from "../util";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
@@ -32,27 +33,6 @@ const MAX_TOOL_ITERATIONS = 8;
 
 const agentLog = new Logger("agent");
 const memoryLog = new Logger("memory");
-
-let messagesTotal: Counter | undefined;
-let agentToolCallsTotal: Counter | undefined;
-
-function getMessagesTotal(): Counter {
-  if (!messagesTotal) {
-    messagesTotal = getMeter().createCounter("messages_total", {
-      description: "Total agent message handles",
-    });
-  }
-  return messagesTotal;
-}
-
-function getAgentToolCallsTotal(): Counter {
-  if (!agentToolCallsTotal) {
-    agentToolCallsTotal = getMeter().createCounter("agent_tool_calls_total", {
-      description: "Total agent tool invocations",
-    });
-  }
-  return agentToolCallsTotal;
-}
 
 type ChatMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -251,7 +231,7 @@ async function runToolCall(
     iteration: number;
   },
 ): Promise<unknown> {
-  return getTracer().startActiveSpan("agent.tool", async (span) => {
+  return getTracer().startActiveSpan("tool.call", async (span) => {
     const started = Date.now();
     span.setAttribute("tool.name", toolName);
     span.setAttribute("telegram.id", ctx.telegramId);
@@ -264,7 +244,6 @@ async function runToolCall(
 
     const handler = toolHandlers[toolName];
     if (!handler) {
-      getAgentToolCallsTotal().add(1, { tool: toolName, result: "error" });
       span.setStatus({ code: SpanStatusCode.ERROR, message: "unknown tool" });
       agentLog.warn("unknown tool", {
         telegram_id: ctx.telegramId,
@@ -301,7 +280,6 @@ async function runToolCall(
       } else {
         result = await handler(ctx, args);
       }
-      getAgentToolCallsTotal().add(1, { tool: toolName, result: "success" });
       span.setStatus({ code: SpanStatusCode.OK });
       agentLog.info("tool done", {
         telegram_id: ctx.telegramId,
@@ -322,7 +300,6 @@ async function runToolCall(
       });
       if (err instanceof Error) span.recordException(err);
       span.setStatus({ code: SpanStatusCode.ERROR, message });
-      getAgentToolCallsTotal().add(1, { tool: toolName, result: "error" });
       return { error: message };
     } finally {
       span.end();
@@ -476,24 +453,10 @@ async function runAgentInner(telegramId: number, userText: string): Promise<Agen
 }
 
 export async function runAgent(telegramId: number, userText: string): Promise<AgentResult> {
-  return getTracer().startActiveSpan("agent.handle", async (span) => {
-    span.setAttribute("telegram.id", telegramId);
-    span.setAttribute("user.text_len", userText.length);
-    try {
-      const result = await runAgentInner(telegramId, userText);
-      getMessagesTotal().add(1, { result: "success" });
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    } catch (err) {
-      getMessagesTotal().add(1, { result: "error" });
-      if (err instanceof Error) span.recordException(err);
-      span.setStatus({
-        code: SpanStatusCode.ERROR,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    } finally {
-      span.end();
-    }
+  return withJob("agent", async () => {
+    const span = trace.getActiveSpan();
+    span?.setAttribute("telegram.id", telegramId);
+    span?.setAttribute("user.text_len", userText.length);
+    return runAgentInner(telegramId, userText);
   });
 }
