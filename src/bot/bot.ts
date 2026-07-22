@@ -12,8 +12,44 @@ import {
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
 import { Logger } from "../telemetry/logger";
+import { withSpan } from "../telemetry/otel";
 
 const log = new Logger("bot");
+
+type RequestKind = "text" | "photo" | "document" | "connect_gmail" | "export_gmail";
+
+async function handleBotRequest<T>(
+  kind: RequestKind,
+  telegramId: number,
+  extra: Record<string, string | number | boolean>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const started = Date.now();
+  return withSpan(
+    "bot.handle",
+    { "telegram.id": telegramId, "request.kind": kind, ...extra },
+    async () => {
+      log.info("request received", { telegram_id: telegramId, kind, ...extra });
+      try {
+        const result = await fn();
+        log.info("request completed", {
+          telegram_id: telegramId,
+          kind,
+          duration_ms: Date.now() - started,
+        });
+        return result;
+      } catch (err) {
+        log.error("request failed", {
+          telegram_id: telegramId,
+          kind,
+          duration_ms: Date.now() - started,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    },
+  );
+}
 
 async function sendAgentResult(
   ctx: {
@@ -22,6 +58,7 @@ async function sendAgentResult(
     replyWithPhoto: (photo: { source: string }) => Promise<unknown>;
   },
   result: Awaited<ReturnType<typeof runAgent>>,
+  meta: { telegram_id: number; kind: RequestKind },
 ): Promise<void> {
   let failedFiles = 0;
 
@@ -50,6 +87,14 @@ async function sendAgentResult(
   if (reply) {
     await ctx.reply(reply);
   }
+
+  log.info("reply sent", {
+    telegram_id: meta.telegram_id,
+    kind: meta.kind,
+    files: result.files.length,
+    failed_files: failedFiles,
+    reply_len: reply.length,
+  });
 }
 
 async function replyDirectGmailExport(
@@ -61,9 +106,18 @@ async function replyDirectGmailExport(
   index: number,
   options?: { forceRefresh?: boolean },
 ): Promise<boolean> {
+  log.info("direct gmail export start", {
+    telegram_id: ctx.from.id,
+    index,
+    force_refresh: Boolean(options?.forceRefresh),
+  });
   const result = await exportGmailBySearchIndex(ctx.from.id, index, options);
   if (!result.ok) {
     if (result.reason === "no_session") {
+      log.info("direct gmail export skipped", {
+        telegram_id: ctx.from.id,
+        reason: "no_session",
+      });
       return false;
     }
     if (result.reason === "invalid_index") {
@@ -106,6 +160,12 @@ async function replyDirectGmailExport(
   }
 
   await ctx.reply(reply);
+  log.info("direct gmail export done", {
+    telegram_id: ctx.from.id,
+    index: result.index,
+    files: result.filePaths.length,
+    failed_files: failedFiles,
+  });
   return true;
 }
 
@@ -140,7 +200,9 @@ export function createBot(): Telegraf {
   });
 
   bot.catch((err, ctx) => {
-    log.error("unhandled error:", err);
+    log.error("unhandled error:", err, {
+      telegram_id: ctx.from?.id ?? 0,
+    });
     const message =
       err instanceof Error && err.name === "TimeoutError"
         ? "Запрос занял слишком много времени. Попробуйте ещё раз."
@@ -156,6 +218,7 @@ export function createBot(): Telegraf {
     if (!from) return;
     const allowed = config.allowedTelegramIds;
     if (allowed.length > 0 && !allowed.includes(from.id)) {
+      log.warn("unauthorized user", { telegram_id: from.id });
       await ctx.reply("Sorry, you are not authorized to use this bot.");
       return;
     }
@@ -203,6 +266,7 @@ export function createBot(): Telegraf {
     }
     try {
       const url = await startConnectFlow(ctx.from.id);
+      log.info("gmail connect link issued", { telegram_id: ctx.from.id });
       await ctx.reply(
         [
           "Open this link to connect Gmail (valid ~10 minutes):",
@@ -218,29 +282,38 @@ export function createBot(): Telegraf {
   }
 
   bot.on(message("photo"), async (ctx) => {
-    await ctx.sendChatAction("typing");
-    try {
-      const photo = ctx.message.photo.at(-1);
-      if (!photo) {
-        await ctx.reply("I couldn't read that photo. Please try sending it again.");
-        return;
+    const telegramId = ctx.from.id;
+    await handleBotRequest("photo", telegramId, {}, async () => {
+      await ctx.sendChatAction("typing");
+      try {
+        const photo = ctx.message.photo.at(-1);
+        if (!photo) {
+          await ctx.reply("I couldn't read that photo. Please try sending it again.");
+          return;
+        }
+        const image = await downloadTelegramFile(ctx, photo.file_id);
+        log.info("telegram file downloaded", {
+          telegram_id: telegramId,
+          kind: "photo",
+          bytes: image.length,
+        });
+        const extracted = await extractTravelInfoFromImage({
+          image,
+          mimeType: "image/jpeg",
+          caption: ctx.message.caption,
+        });
+        if (!extracted || extracted === "NO_TRAVEL_INFO") {
+          log.info("image had no travel info", { telegram_id: telegramId, kind: "photo" });
+          await ctx.reply("I couldn't find travel details in that image. Try a clearer photo or type the details.");
+          return;
+        }
+        const result = await runAgent(telegramId, imagePromptFromExtraction(extracted, ctx.message.caption));
+        await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "photo" });
+      } catch (err) {
+        log.error("image parsing error:", err);
+        await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
       }
-      const image = await downloadTelegramFile(ctx, photo.file_id);
-      const extracted = await extractTravelInfoFromImage({
-        image,
-        mimeType: "image/jpeg",
-        caption: ctx.message.caption,
-      });
-      if (!extracted || extracted === "NO_TRAVEL_INFO") {
-        await ctx.reply("I couldn't find travel details in that image. Try a clearer photo or type the details.");
-        return;
-      }
-      const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
-      await sendAgentResult(ctx, result);
-    } catch (err) {
-      log.error("image parsing error:", err);
-      await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
-    }
+    });
   });
 
   bot.on(message("document"), async (ctx) => {
@@ -251,63 +324,81 @@ export function createBot(): Telegraf {
       return;
     }
 
-    await ctx.sendChatAction("typing");
-    try {
-      const image = await downloadTelegramFile(ctx, document.file_id);
-      const extracted = await extractTravelInfoFromImage({
-        image,
-        mimeType,
-        caption: ctx.message.caption,
-      });
-      if (!extracted || extracted === "NO_TRAVEL_INFO") {
-        await ctx.reply("I couldn't find travel details in that image. Try a clearer image or type the details.");
-        return;
+    const telegramId = ctx.from.id;
+    await handleBotRequest("document", telegramId, { mime_type: mimeType }, async () => {
+      await ctx.sendChatAction("typing");
+      try {
+        const image = await downloadTelegramFile(ctx, document.file_id);
+        log.info("telegram file downloaded", {
+          telegram_id: telegramId,
+          kind: "document",
+          bytes: image.length,
+        });
+        const extracted = await extractTravelInfoFromImage({
+          image,
+          mimeType,
+          caption: ctx.message.caption,
+        });
+        if (!extracted || extracted === "NO_TRAVEL_INFO") {
+          log.info("image had no travel info", { telegram_id: telegramId, kind: "document" });
+          await ctx.reply("I couldn't find travel details in that image. Try a clearer image or type the details.");
+          return;
+        }
+        const result = await runAgent(telegramId, imagePromptFromExtraction(extracted, ctx.message.caption));
+        await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "document" });
+      } catch (err) {
+        log.error("image parsing error:", err);
+        await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
       }
-      const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
-      await sendAgentResult(ctx, result);
-    } catch (err) {
-      log.error("image parsing error:", err);
-      await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
-    }
+    });
   });
 
   bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith("/")) return; // unknown command; ignore
 
-    if (isConnectGmailRequest(text)) {
-      await replyConnectGmail(ctx);
-      return;
-    }
-
+    const telegramId = ctx.from.id;
     const exportRequest = parseExportGmailByNumberRequest(text);
-    if (exportRequest !== null) {
-      await ctx.sendChatAction("upload_document");
-      try {
-        const handled = await replyDirectGmailExport(ctx, exportRequest.index, {
-          forceRefresh: exportRequest.forceRefresh,
-        });
-        if (handled) return;
-      } catch (err) {
-        log.error("direct gmail export error:", err);
-        await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+    const kind: RequestKind = isConnectGmailRequest(text)
+      ? "connect_gmail"
+      : exportRequest !== null
+        ? "export_gmail"
+        : "text";
+
+    await handleBotRequest(kind, telegramId, { text_len: text.length }, async () => {
+      if (kind === "connect_gmail") {
+        await replyConnectGmail(ctx);
         return;
       }
-    }
 
-    await ctx.sendChatAction("typing");
-    const typingTimer = setInterval(() => {
-      void ctx.sendChatAction("typing");
-    }, 4000);
-    try {
-      const result = await runAgent(ctx.from.id, text);
-      await sendAgentResult(ctx, result);
-    } catch (err) {
-      log.error("agent error:", err);
-      await ctx.reply("Something went wrong while planning. Please try again.");
-    } finally {
-      clearInterval(typingTimer);
-    }
+      if (exportRequest !== null) {
+        await ctx.sendChatAction("upload_document");
+        try {
+          const handled = await replyDirectGmailExport(ctx, exportRequest.index, {
+            forceRefresh: exportRequest.forceRefresh,
+          });
+          if (handled) return;
+        } catch (err) {
+          log.error("direct gmail export error:", err);
+          await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+          return;
+        }
+      }
+
+      await ctx.sendChatAction("typing");
+      const typingTimer = setInterval(() => {
+        void ctx.sendChatAction("typing");
+      }, 4000);
+      try {
+        const result = await runAgent(telegramId, text);
+        await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "text" });
+      } catch (err) {
+        log.error("agent error:", err);
+        await ctx.reply("Something went wrong while planning. Please try again.");
+      } finally {
+        clearInterval(typingTimer);
+      }
+    });
   });
 
   return bot;

@@ -2,6 +2,7 @@ import { context, trace } from "@opentelemetry/api";
 import { logs, SeverityNumber, type Logger as OtelLogger } from "@opentelemetry/api-logs";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
+type LogAttributeValue = string | number | boolean;
 
 const SEVERITY: Record<LogLevel, { number: SeverityNumber; text: string }> = {
   debug: { number: SeverityNumber.DEBUG, text: "DEBUG" },
@@ -24,6 +25,10 @@ function formatArgs(args: unknown[]): string {
     .join(" ");
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value) && !(value instanceof Error);
+}
+
 function activeTraceAttributes(): Record<string, string> {
   const span = trace.getSpan(context.active());
   if (!span) return {};
@@ -33,6 +38,19 @@ function activeTraceAttributes(): Record<string, string> {
     trace_id: spanContext.traceId,
     span_id: spanContext.spanId,
   };
+}
+
+function collectAttributes(args: unknown[]): Record<string, LogAttributeValue> {
+  const attributes: Record<string, LogAttributeValue> = { ...activeTraceAttributes() };
+  for (const arg of args) {
+    if (!isPlainObject(arg)) continue;
+    for (const [key, value] of Object.entries(arg)) {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        attributes[key] = value;
+      }
+    }
+  }
+  return attributes;
 }
 
 export class Logger {
@@ -85,7 +103,7 @@ export class Logger {
         body: formatArgs(consoleArgs),
         severityNumber: severity.number,
         severityText: severity.text,
-        attributes: activeTraceAttributes(),
+        attributes: collectAttributes(args),
       });
     } catch {
       // Never fail the app if log export misbehaves.

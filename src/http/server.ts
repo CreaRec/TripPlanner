@@ -131,9 +131,11 @@ async function handleGoogleCallback(
   }
 
   try {
+    oauthLog.info("callback start", { telegram_id: consumed.telegramId });
     const tokens = await exchangeCodeForTokens(code);
     const googleEmail = await fetchGoogleEmail(tokens.accessToken);
     await upsertAccount(consumed.telegramId, googleEmail, tokens);
+    oauthLog.info("callback success", { telegram_id: consumed.telegramId });
     sendHtml(
       res,
       200,
@@ -144,7 +146,10 @@ async function handleGoogleCallback(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    oauthLog.error("callback failed:", message);
+    oauthLog.error("callback failed", {
+      telegram_id: consumed.telegramId,
+      error: message,
+    });
     sendHtml(
       res,
       500,

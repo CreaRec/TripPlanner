@@ -1,4 +1,4 @@
-import { metrics, trace, type Meter, type Tracer } from "@opentelemetry/api";
+import { metrics, trace, SpanStatusCode, type Meter, type Tracer } from "@opentelemetry/api";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
@@ -100,6 +100,33 @@ export function getTracer(): Tracer {
 
 export function getMeter(): Meter {
   return metrics.getMeter(METER_NAME);
+}
+
+/** Run `fn` inside an active span so nested work and logs share one trace. */
+export async function withSpan<T>(
+  name: string,
+  attributes: Record<string, string | number | boolean>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return getTracer().startActiveSpan(name, async (span) => {
+    for (const [key, value] of Object.entries(attributes)) {
+      span.setAttribute(key, value);
+    }
+    try {
+      const result = await fn();
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      if (err instanceof Error) span.recordException(err);
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 /** Exposed for tests — whether the SDK process has been initialized (including no-op path). */

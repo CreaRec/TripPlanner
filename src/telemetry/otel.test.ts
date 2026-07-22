@@ -5,6 +5,7 @@ import {
   resetTelemetryForTests,
   shutdownTelemetry,
   startTelemetry,
+  withSpan,
 } from "./otel";
 
 describe("telemetry/otel", () => {
@@ -42,5 +43,11 @@ describe("telemetry/otel", () => {
     expect(info).toHaveBeenCalledWith(
       expect.stringContaining("OTEL_SDK_DISABLED"),
     );
+  });
+
+  it("withSpan runs the callback and does not throw without a real SDK", async () => {
+    await expect(
+      withSpan("test.span", { "telegram.id": 1 }, async () => "ok"),
+    ).resolves.toBe("ok");
   });
 });

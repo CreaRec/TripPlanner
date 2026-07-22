@@ -89,10 +89,19 @@ When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset (local `npm run dev` / tests), the S
 
 All application logs go through `Logger` (`src/telemetry/logger.ts`): stdout for `docker compose logs`, and OTLP logs to Alloy/Loki when the SDK is running. Do not use raw `console.*` in app code.
 
+Request chain (one Telegram update → one `trace_id`):
+
+1. `bot.handle` — `request received` / `request completed`
+2. optional `vision` — image extract
+3. `agent.handle` — `handle start` → `llm request` / `llm tool calls` / `tool start`/`tool done` → `handle done`
+4. `bot` — `reply sent`
+
+Correlate in Loki by `trace_id` (or `telegram_id`). Tempo spans: `bot.handle` → `agent.handle` → `agent.tool`.
+
 Grafana Explore checks after deploy:
 
-- Loki: `{service_name="crea-trip-planner"}`
-- Tempo: search service `crea-trip-planner` / span `agent.handle`
+- Loki: `{service_name="crea-trip-planner"}` (filter `| telegram_id=111` or by `trace_id`)
+- Tempo: search service `crea-trip-planner` / span `bot.handle` or `agent.handle`
 - Mimir: `messages_total`
 
 ## Day-to-day operations
