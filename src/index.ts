@@ -4,6 +4,7 @@ import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
 import { createHttpServer } from "./http/server";
 import { scheduleExportRetention } from "./services/export/exportRetention";
+import { setBotUp } from "./telemetry/botMetrics";
 import { Logger } from "./telemetry/logger";
 import { shutdownTelemetry, startTelemetry } from "./telemetry/otel";
 
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     shutdownLog.info(`received ${signal}, stopping...`);
+    setBotUp(0);
     if (retentionTimer) clearInterval(retentionTimer);
     bot.stop(signal);
     if (httpServer) {
@@ -57,12 +59,15 @@ async function main(): Promise<void> {
   // bot.launch() resolves only when the bot stops, so we don't await it here.
   bot.launch().catch((err) => {
     fatalLog.error("bot stopped with error:", err);
+    setBotUp(0);
     void shutdownTelemetry().finally(() => process.exit(1));
   });
+  setBotUp(1);
   log.info("bot is running.");
 }
 
 main().catch((err) => {
   fatalLog.error("failed to start:", err);
+  setBotUp(0);
   void shutdownTelemetry().finally(() => process.exit(1));
 });

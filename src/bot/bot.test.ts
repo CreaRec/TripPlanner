@@ -75,6 +75,7 @@ vi.mock("../config", () => ({
 
 import { createBot } from "./bot";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
+import * as botMetrics from "../telemetry/botMetrics";
 
 interface FakeTelegrafHandlers {
   use: Array<(ctx: unknown, next: () => unknown) => unknown>;
@@ -119,12 +120,16 @@ beforeEach(() => {
 
 describe("whitelist middleware", () => {
   it("rejects users not in the whitelist", async () => {
+    const trackSpy = vi.spyOn(botMetrics, "trackUpdate");
     const h = bot();
     const ctx = fakeCtx({ from: { id: 999 } });
     const next = vi.fn();
     await h.use[0](ctx, next);
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("not authorized"));
     expect(next).not.toHaveBeenCalled();
+    expect(trackSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ result: "skipped", handler: "message" }),
+    );
   });
 
   it("admits whitelisted users and ensures the user row", async () => {
@@ -183,6 +188,23 @@ describe("text handler", () => {
     const ctx = fakeCtx({ message: { text: "/unknown" } });
     await handler("text")(ctx);
     expect(f.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("records handled agent errors as update errors without throwing", async () => {
+    const trackSpy = vi.spyOn(botMetrics, "trackUpdate");
+    f.runAgent.mockRejectedValueOnce(new Error("OpenAI rate limit"));
+    const ctx = fakeCtx({ message: { text: "plan my trip" } });
+    await expect(handler("text")(ctx)).resolves.toBeUndefined();
+    expect(ctx.reply).toHaveBeenCalledWith(
+      expect.stringContaining("Something went wrong while planning"),
+    );
+    expect(trackSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handler: "message",
+        result: "error",
+        error_type: "openai",
+      }),
+    );
   });
 
   it("starts gmail connect flow for natural-language connect requests", async () => {

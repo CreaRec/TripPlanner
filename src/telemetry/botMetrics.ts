@@ -1,24 +1,18 @@
-import type { Counter, Histogram, UpDownCounter } from "@opentelemetry/api";
+import type { Counter, Gauge, Histogram } from "@opentelemetry/api";
 import { getMeter, withSpan } from "./otel";
 
 /** CreaGrafana telemetry-contract metric / label enums. */
 
 export type MetricResult = "success" | "error" | "skipped";
-export type UpdateKind = "message" | "command";
 export type HandlerName = "message" | "vision" | "gmail_connect" | "gmail_export" | "command";
 export type JobName = "agent" | "vision" | "gmail";
 export type ErrorType = "timeout" | "telegram" | "openai" | "gmail" | "unknown";
-export type ByteDirection = "in" | "out";
 
 export const CONTRACT_METRIC_NAMES = [
   "bot_updates_total",
-  "bot_commands_total",
   "bot_handler_duration_seconds",
   "bot_errors_total",
-  "bot_inflight",
-  "bot_jobs_total",
-  "bot_job_duration_seconds",
-  "bot_job_bytes_total",
+  "bot_up",
 ] as const;
 
 export const CONTRACT_SPAN_NAMES = {
@@ -29,14 +23,23 @@ export const CONTRACT_SPAN_NAMES = {
   jobGmail: "bot.job.gmail",
 } as const;
 
+/** Error already answered to the user; record as update error without bubbling to bot.catch. */
+export class HandledUpdateError extends Error {
+  readonly errorType: ErrorType;
+
+  constructor(errorType: ErrorType, cause?: unknown) {
+    const message =
+      cause instanceof Error ? cause.message : cause != null ? String(cause) : errorType;
+    super(message, cause instanceof Error ? { cause } : undefined);
+    this.name = "HandledUpdateError";
+    this.errorType = errorType;
+  }
+}
+
 let updatesTotal: Counter | undefined;
-let commandsTotal: Counter | undefined;
 let errorsTotal: Counter | undefined;
-let jobsTotal: Counter | undefined;
-let jobBytesTotal: Counter | undefined;
 let handlerDuration: Histogram | undefined;
-let jobDuration: Histogram | undefined;
-let inflight: UpDownCounter | undefined;
+let botUp: Gauge | undefined;
 
 function getUpdatesTotal(): Counter {
   if (!updatesTotal) {
@@ -47,15 +50,6 @@ function getUpdatesTotal(): Counter {
   return updatesTotal;
 }
 
-function getCommandsTotal(): Counter {
-  if (!commandsTotal) {
-    commandsTotal = getMeter().createCounter("bot_commands_total", {
-      description: "Slash commands handled",
-    });
-  }
-  return commandsTotal;
-}
-
 function getErrorsTotal(): Counter {
   if (!errorsTotal) {
     errorsTotal = getMeter().createCounter("bot_errors_total", {
@@ -63,24 +57,6 @@ function getErrorsTotal(): Counter {
     });
   }
   return errorsTotal;
-}
-
-function getJobsTotal(): Counter {
-  if (!jobsTotal) {
-    jobsTotal = getMeter().createCounter("bot_jobs_total", {
-      description: "Job attempts",
-    });
-  }
-  return jobsTotal;
-}
-
-function getJobBytesTotal(): Counter {
-  if (!jobBytesTotal) {
-    jobBytesTotal = getMeter().createCounter("bot_job_bytes_total", {
-      description: "Bytes transferred by jobs",
-    });
-  }
-  return jobBytesTotal;
 }
 
 function getHandlerDuration(): Histogram {
@@ -93,26 +69,17 @@ function getHandlerDuration(): Histogram {
   return handlerDuration;
 }
 
-function getJobDuration(): Histogram {
-  if (!jobDuration) {
-    jobDuration = getMeter().createHistogram("bot_job_duration_seconds", {
-      description: "Job latency",
-      unit: "s",
+function getBotUp(): Gauge {
+  if (!botUp) {
+    botUp = getMeter().createGauge("bot_up", {
+      description: "1 while the process is healthy",
     });
   }
-  return jobDuration;
-}
-
-function getInflight(): UpDownCounter {
-  if (!inflight) {
-    inflight = getMeter().createUpDownCounter("bot_inflight", {
-      description: "In-progress handlers",
-    });
-  }
-  return inflight;
+  return botUp;
 }
 
 export function classifyErrorType(err: unknown): ErrorType {
+  if (err instanceof HandledUpdateError) return err.errorType;
   if (!(err instanceof Error)) return "unknown";
   if (err.name === "TimeoutError") return "timeout";
   const message = err.message.toLowerCase();
@@ -134,16 +101,11 @@ export function classifyErrorType(err: unknown): ErrorType {
   return "unknown";
 }
 
-export function beginInflight(handler: HandlerName): void {
-  getInflight().add(1, { handler });
-}
-
-export function endInflight(handler: HandlerName): void {
-  getInflight().add(-1, { handler });
+export function setBotUp(value: 0 | 1): void {
+  getBotUp().record(value);
 }
 
 export function trackUpdate(options: {
-  update_kind: UpdateKind;
   handler: HandlerName;
   result: MetricResult;
   durationSec: number;
@@ -151,7 +113,6 @@ export function trackUpdate(options: {
 }): void {
   getUpdatesTotal().add(1, {
     result: options.result,
-    update_kind: options.update_kind,
   });
   getHandlerDuration().record(options.durationSec, {
     handler: options.handler,
@@ -165,16 +126,6 @@ export function trackUpdate(options: {
   }
 }
 
-export function trackCommand(options: {
-  command: string;
-  result: MetricResult;
-}): void {
-  getCommandsTotal().add(1, {
-    command: options.command,
-    result: options.result,
-  });
-}
-
 export function trackError(options: {
   error_type: ErrorType;
   handler: HandlerName;
@@ -185,73 +136,15 @@ export function trackError(options: {
   });
 }
 
-export function trackJob(options: {
-  job: JobName;
-  result: MetricResult;
-  durationSec: number;
-  bytes?: number;
-  direction?: ByteDirection;
-}): void {
-  getJobsTotal().add(1, { job: options.job, result: options.result });
-  getJobDuration().record(options.durationSec, {
-    job: options.job,
-    result: options.result,
-  });
-  if (
-    typeof options.bytes === "number" &&
-    options.bytes > 0 &&
-    options.direction
-  ) {
-    getJobBytesTotal().add(options.bytes, {
-      job: options.job,
-      direction: options.direction,
-    });
-  }
-}
-
-/** Run work inside `bot.job.<name>` and record job metrics. */
-export async function withJob<T>(
-  job: JobName,
-  fn: () => Promise<T>,
-  options?: {
-    bytes?: () => number | Promise<number | undefined> | undefined;
-    direction?: ByteDirection;
-    resultForValue?: (value: T) => MetricResult;
-  },
-): Promise<T> {
-  const started = Date.now();
-  return withSpan(`bot.job.${job}`, { "bot.job": job }, async () => {
-    try {
-      const value = await fn();
-      const result = options?.resultForValue?.(value) ?? "success";
-      const bytes = options?.bytes ? await options.bytes() : undefined;
-      trackJob({
-        job,
-        result,
-        durationSec: (Date.now() - started) / 1000,
-        bytes: typeof bytes === "number" ? bytes : undefined,
-        direction: options?.direction,
-      });
-      return value;
-    } catch (err) {
-      trackJob({
-        job,
-        result: "error",
-        durationSec: (Date.now() - started) / 1000,
-      });
-      throw err;
-    }
-  });
+/** Run work inside `bot.job.<name>` (traces only; no job metrics). */
+export async function withJobSpan<T>(job: JobName, fn: () => Promise<T>): Promise<T> {
+  return withSpan(`bot.job.${job}`, { "bot.job": job }, fn);
 }
 
 /** Reset lazy instrument handles (unit tests). */
 export function resetBotMetricsForTests(): void {
   updatesTotal = undefined;
-  commandsTotal = undefined;
   errorsTotal = undefined;
-  jobsTotal = undefined;
-  jobBytesTotal = undefined;
   handlerDuration = undefined;
-  jobDuration = undefined;
-  inflight = undefined;
+  botUp = undefined;
 }

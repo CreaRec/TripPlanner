@@ -1,6 +1,6 @@
-import { stat } from "node:fs/promises";
 import { Telegraf } from "telegraf";
 import { message } from "telegraf/filters";
+import { trace } from "@opentelemetry/api";
 import { config, isGmailOAuthConfigured } from "../config";
 import { runAgent } from "../agent/runAgent";
 import { extractTravelInfoFromImage } from "../agent/vision";
@@ -13,14 +13,13 @@ import {
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
 import {
-  beginInflight,
   classifyErrorType,
   CONTRACT_SPAN_NAMES,
-  endInflight,
-  trackCommand,
+  HandledUpdateError,
   trackError,
   trackUpdate,
-  withJob,
+  withJobSpan,
+  type ErrorType,
   type HandlerName,
   type MetricResult,
 } from "../telemetry/botMetrics";
@@ -45,16 +44,11 @@ function handlerForKind(kind: RequestKind): HandlerName {
   }
 }
 
-async function sumFileBytes(paths: string[]): Promise<number> {
-  let total = 0;
-  for (const filePath of paths) {
-    try {
-      total += (await stat(filePath)).size;
-    } catch {
-      // Ignore missing files for metrics.
-    }
-  }
-  return total;
+function markSpanResult(result: MetricResult, errorType?: ErrorType): void {
+  const span = trace.getActiveSpan();
+  if (!span) return;
+  span.setAttribute("result", result);
+  if (errorType) span.setAttribute("error.type", errorType);
 }
 
 async function handleBotRequest<T>(
@@ -62,63 +56,71 @@ async function handleBotRequest<T>(
   telegramId: number,
   extra: Record<string, string | number | boolean>,
   fn: () => Promise<T>,
-): Promise<T> {
+): Promise<T | undefined> {
   const started = Date.now();
   const handler = handlerForKind(kind);
-  beginInflight(handler);
-  return withSpan(
-    CONTRACT_SPAN_NAMES.handleUpdate,
-    {
-      "telegram.id": telegramId,
-      "request.kind": kind,
-      handler,
-      "update.kind": "message",
-      ...extra,
-    },
-    async () => {
-      log.info("request received", {
-        telegram_id: telegramId,
-        kind,
+  let result: MetricResult = "success";
+  let errorType: ErrorType | undefined;
+
+  try {
+    return await withSpan(
+      CONTRACT_SPAN_NAMES.handleUpdate,
+      {
+        "telegram.id": telegramId,
+        "request.kind": kind,
         handler,
+        "update.kind": "message",
         ...extra,
-      });
-      let result: MetricResult = "success";
-      let errorType: ReturnType<typeof classifyErrorType> | undefined;
-      try {
-        const value = await fn();
-        log.info("request completed", {
+      },
+      async () => {
+        log.info("request received", {
           telegram_id: telegramId,
           kind,
           handler,
-          result,
-          duration_ms: Date.now() - started,
+          ...extra,
         });
-        return value;
-      } catch (err) {
-        result = "error";
-        errorType = classifyErrorType(err);
-        log.error("request failed", {
-          telegram_id: telegramId,
-          kind,
-          handler,
-          result,
-          error_type: errorType,
-          duration_ms: Date.now() - started,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
-      } finally {
-        trackUpdate({
-          update_kind: "message",
-          handler,
-          result,
-          durationSec: (Date.now() - started) / 1000,
-          error_type: errorType,
-        });
-        endInflight(handler);
-      }
-    },
-  );
+        try {
+          const value = await fn();
+          markSpanResult("success");
+          log.info("request completed", {
+            telegram_id: telegramId,
+            kind,
+            handler,
+            result: "success",
+            duration_ms: Date.now() - started,
+          });
+          return value;
+        } catch (err) {
+          const typed = classifyErrorType(err);
+          markSpanResult("error", typed);
+          throw err;
+        }
+      },
+    );
+  } catch (err) {
+    result = "error";
+    errorType = classifyErrorType(err);
+    log.error("request failed", {
+      telegram_id: telegramId,
+      kind,
+      handler,
+      result,
+      error_type: errorType,
+      duration_ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (err instanceof HandledUpdateError) {
+      return undefined;
+    }
+    throw err;
+  } finally {
+    trackUpdate({
+      handler,
+      result,
+      durationSec: (Date.now() - started) / 1000,
+      error_type: errorType,
+    });
+  }
 }
 
 async function handleCommand(
@@ -127,33 +129,55 @@ async function handleCommand(
   fn: () => Promise<void>,
 ): Promise<void> {
   const started = Date.now();
-  beginInflight("command");
-  return withSpan(
-    CONTRACT_SPAN_NAMES.command,
-    { "bot.command": command, "telegram.id": telegramId, handler: "command" },
-    async () => {
-      let result: MetricResult = "success";
-      let errorType: ReturnType<typeof classifyErrorType> | undefined;
-      try {
-        await fn();
-        trackCommand({ command, result: "success" });
-      } catch (err) {
-        result = "error";
-        errorType = classifyErrorType(err);
-        trackCommand({ command, result: "error" });
-        throw err;
-      } finally {
-        trackUpdate({
-          update_kind: "command",
-          handler: "command",
-          result,
-          durationSec: (Date.now() - started) / 1000,
-          error_type: errorType,
-        });
-        endInflight("command");
-      }
-    },
-  );
+  let result: MetricResult = "success";
+  let errorType: ErrorType | undefined;
+
+  try {
+    await withSpan(
+      CONTRACT_SPAN_NAMES.handleUpdate,
+      {
+        "telegram.id": telegramId,
+        handler: "command",
+        "update.kind": "command",
+        "bot.command": command,
+      },
+      async () => {
+        try {
+          await withSpan(
+            CONTRACT_SPAN_NAMES.command,
+            { "bot.command": command, handler: "command" },
+            async () => {
+              try {
+                await fn();
+                markSpanResult("success");
+              } catch (err) {
+                markSpanResult("error", classifyErrorType(err));
+                throw err;
+              }
+            },
+          );
+          markSpanResult("success");
+        } catch (err) {
+          markSpanResult("error", classifyErrorType(err));
+          throw err;
+        }
+      },
+    );
+  } catch (err) {
+    result = "error";
+    errorType = classifyErrorType(err);
+    if (err instanceof HandledUpdateError) {
+      return;
+    }
+    throw err;
+  } finally {
+    trackUpdate({
+      handler: "command",
+      result,
+      durationSec: (Date.now() - started) / 1000,
+      error_type: errorType,
+    });
+  }
 }
 
 async function sendAgentResult(
@@ -220,80 +244,67 @@ async function replyDirectGmailExport(
     force_refresh: Boolean(options?.forceRefresh),
   });
 
-  let outBytes = 0;
-  const outcome = await withJob(
-    "gmail",
-    async () => {
-      const result = await exportGmailBySearchIndex(ctx.from.id, index, options);
-      if (!result.ok) {
-        if (result.reason === "no_session") {
-          log.info("direct gmail export skipped", {
-            telegram_id: ctx.from.id,
-            reason: "no_session",
-            result: "skipped",
-          });
-          return { handled: false, metricResult: "skipped" as const };
-        }
-        if (result.reason === "invalid_index") {
-          await ctx.reply(
-            `В последнем поиске только ${result.count} ${result.count === 1 ? "письмо" : "писем"}. Укажите номер от 1 до ${result.count}.`,
-          );
-          return { handled: true, metricResult: "success" as const };
-        }
-        if (result.reason === "account_unavailable") {
-          await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
-          return { handled: true, metricResult: "success" as const };
-        }
-        trackError({ error_type: "gmail", handler: "gmail_export" });
-        log.error("direct gmail export failed:", result.message);
-        await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
-        return { handled: true, metricResult: "error" as const };
+  return withJobSpan("gmail", async () => {
+    const result = await exportGmailBySearchIndex(ctx.from.id, index, options);
+    if (!result.ok) {
+      if (result.reason === "no_session") {
+        log.info("direct gmail export skipped", {
+          telegram_id: ctx.from.id,
+          reason: "no_session",
+          result: "skipped",
+        });
+        return false;
       }
-
-      let failedFiles = 0;
-      for (const filePath of result.filePaths) {
-        try {
-          await ctx.replyWithDocument({ source: filePath });
-        } catch (err) {
-          failedFiles += 1;
-          trackError({ error_type: "telegram", handler: "gmail_export" });
-          log.error("failed to send exported gmail file:", filePath, err);
-        }
+      if (result.reason === "invalid_index") {
+        await ctx.reply(
+          `В последнем поиске только ${result.count} ${result.count === 1 ? "письмо" : "писем"}. Укажите номер от 1 до ${result.count}.`,
+        );
+        return true;
       }
-
-      if (failedFiles === result.filePaths.length) {
-        await ctx.reply("Не удалось прикрепить файлы. Попробуйте ещё раз.");
-        return { handled: true, metricResult: "error" as const };
+      if (result.reason === "account_unavailable") {
+        await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
+        return true;
       }
+      log.error("direct gmail export failed:", result.message);
+      await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
+      throw new HandledUpdateError("gmail");
+    }
 
-      let reply = formatGmailExportSuccessMessage({
-        index: result.index,
-        attachmentCount: result.attachmentCount,
-        skippedAttachments: result.skippedAttachments,
-      });
-      if (failedFiles > 0) {
-        reply = `${reply}\n\nНе удалось прикрепить часть файлов.`;
+    let failedFiles = 0;
+    for (const filePath of result.filePaths) {
+      try {
+        await ctx.replyWithDocument({ source: filePath });
+      } catch (err) {
+        failedFiles += 1;
+        trackError({ error_type: "telegram", handler: "gmail_export" });
+        log.error("failed to send exported gmail file:", filePath, err);
       }
+    }
 
-      await ctx.reply(reply);
-      outBytes = await sumFileBytes(result.filePaths);
-      log.info("direct gmail export done", {
-        telegram_id: ctx.from.id,
-        index: result.index,
-        files: result.filePaths.length,
-        failed_files: failedFiles,
-        result: "success",
-      });
-      return { handled: true, metricResult: "success" as const };
-    },
-    {
-      direction: "out",
-      bytes: () => outBytes,
-      resultForValue: (value) => value.metricResult,
-    },
-  );
+    if (failedFiles === result.filePaths.length) {
+      await ctx.reply("Не удалось прикрепить файлы. Попробуйте ещё раз.");
+      throw new HandledUpdateError("telegram");
+    }
 
-  return outcome.handled;
+    let reply = formatGmailExportSuccessMessage({
+      index: result.index,
+      attachmentCount: result.attachmentCount,
+      skippedAttachments: result.skippedAttachments,
+    });
+    if (failedFiles > 0) {
+      reply = `${reply}\n\nНе удалось прикрепить часть файлов.`;
+    }
+
+    await ctx.reply(reply);
+    log.info("direct gmail export done", {
+      telegram_id: ctx.from.id,
+      index: result.index,
+      files: result.filePaths.length,
+      failed_files: failedFiles,
+      result: "success",
+    });
+    return true;
+  });
 }
 
 async function downloadTelegramFile(ctx: {
@@ -327,8 +338,8 @@ export function createBot(): Telegraf {
   });
 
   bot.catch((err, ctx) => {
+    // Update-level errors are already counted in handleBotRequest / handleCommand.
     const errorType = classifyErrorType(err);
-    trackError({ error_type: errorType, handler: "message" });
     log.error("unhandled error:", err, {
       telegram_id: ctx.from?.id ?? 0,
       error_type: errorType,
@@ -350,8 +361,24 @@ export function createBot(): Telegraf {
     if (!from) return;
     const allowed = config.allowedTelegramIds;
     if (allowed.length > 0 && !allowed.includes(from.id)) {
-      log.warn("unauthorized user", { telegram_id: from.id, result: "skipped" });
-      await ctx.reply("Sorry, you are not authorized to use this bot.");
+      const started = Date.now();
+      await withSpan(
+        CONTRACT_SPAN_NAMES.handleUpdate,
+        {
+          "telegram.id": from.id,
+          handler: "message",
+          result: "skipped",
+        },
+        async () => {
+          log.warn("unauthorized user", { telegram_id: from.id, result: "skipped" });
+          await ctx.reply("Sorry, you are not authorized to use this bot.");
+        },
+      );
+      trackUpdate({
+        handler: "message",
+        result: "skipped",
+        durationSec: (Date.now() - started) / 1000,
+      });
       return;
     }
     const name = [from.first_name, from.last_name].filter(Boolean).join(" ") || from.username;
@@ -412,9 +439,9 @@ export function createBot(): Telegraf {
         ].join("\n"),
       );
     } catch (err) {
-      trackError({ error_type: classifyErrorType(err), handler: "gmail_connect" });
       log.error("connect gmail error:", err);
       await ctx.reply("Could not start Gmail connection. Please try again.");
+      throw new HandledUpdateError(classifyErrorType(err), err);
     }
   }
 
@@ -448,9 +475,10 @@ export function createBot(): Telegraf {
         const result = await runAgent(telegramId, imagePromptFromExtraction(extracted, ctx.message.caption));
         await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "photo", handler });
       } catch (err) {
-        trackError({ error_type: classifyErrorType(err), handler });
+        if (err instanceof HandledUpdateError) throw err;
         log.error("image parsing error:", err);
         await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
+        throw new HandledUpdateError(classifyErrorType(err), err);
       }
     });
   });
@@ -487,9 +515,10 @@ export function createBot(): Telegraf {
         const result = await runAgent(telegramId, imagePromptFromExtraction(extracted, ctx.message.caption));
         await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "document", handler });
       } catch (err) {
-        trackError({ error_type: classifyErrorType(err), handler });
+        if (err instanceof HandledUpdateError) throw err;
         log.error("image parsing error:", err);
         await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
+        throw new HandledUpdateError(classifyErrorType(err), err);
       }
     });
   });
@@ -521,10 +550,10 @@ export function createBot(): Telegraf {
           });
           if (handled) return;
         } catch (err) {
-          trackError({ error_type: classifyErrorType(err), handler: "gmail_export" });
+          if (err instanceof HandledUpdateError) throw err;
           log.error("direct gmail export error:", err);
           await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
-          return;
+          throw new HandledUpdateError(classifyErrorType(err), err);
         }
       }
 
@@ -536,9 +565,10 @@ export function createBot(): Telegraf {
         const result = await runAgent(telegramId, text);
         await sendAgentResult(ctx, result, { telegram_id: telegramId, kind: "text", handler });
       } catch (err) {
-        trackError({ error_type: classifyErrorType(err), handler });
+        if (err instanceof HandledUpdateError) throw err;
         log.error("agent error:", err);
         await ctx.reply("Something went wrong while planning. Please try again.");
+        throw new HandledUpdateError(classifyErrorType(err), err);
       } finally {
         clearInterval(typingTimer);
       }

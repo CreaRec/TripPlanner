@@ -93,11 +93,14 @@ All application logs go through `Logger` (`src/telemetry/logger.ts`): stdout for
 
 Request chain (one Telegram update → one `trace_id`):
 
-1. `bot.handle_update` — `request received` / `request completed` + `bot_updates_total` / `bot_handler_duration_seconds`
-2. optional `bot.job.vision` — image extract
-3. `bot.job.agent` — `handle start` → `llm request` / `tool.call` → `handle done`
-4. optional `bot.job.gmail` — direct Gmail export
-5. `bot` — `reply sent`
+1. `bot.handle_update` — `request received` / `request completed` + contract metrics (`bot_updates_total`, `bot_handler_duration_seconds`; errors also increment `bot_errors_total`)
+2. optional child `bot.command` — `/start` / `/help`
+3. optional `bot.job.vision` — image extract
+4. `bot.job.agent` — `handle start` → `llm request` / `tool.call` → `handle done`
+5. optional `bot.job.gmail` — direct Gmail export
+6. `bot` — `reply sent`
+
+Contract metrics only: `bot_updates_total` (`result`), `bot_handler_duration_seconds` (`handler`, `result`), `bot_errors_total` (`error_type`, `handler`), `bot_up` (no labels). Nested `bot.job.*` spans are traces only.
 
 Correlate in Loki by `trace_id` (or `telegram_id`). Tempo spans: `bot.handle_update` → `bot.job.agent` / `bot.job.vision` / `bot.job.gmail`.
 
@@ -112,7 +115,11 @@ sum by (service_name) (rate(bot_updates_total{service_namespace="bots"}[5m]))
 ```
 
 ```promql
-sum by (service_name, result) (rate(bot_errors_total[5m]))
+sum by (service_name) (rate(bot_errors_total[5m]))
+```
+
+```promql
+max by (service_name) (bot_up)
 ```
 
 ## Day-to-day operations

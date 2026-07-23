@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  beginInflight,
   classifyErrorType,
   CONTRACT_METRIC_NAMES,
   CONTRACT_SPAN_NAMES,
-  endInflight,
+  HandledUpdateError,
   resetBotMetricsForTests,
-  trackCommand,
+  setBotUp,
   trackError,
-  trackJob,
   trackUpdate,
-  withJob,
+  withJobSpan,
 } from "./botMetrics";
 
 describe("telemetry/botMetrics", () => {
@@ -19,19 +17,13 @@ describe("telemetry/botMetrics", () => {
     vi.restoreAllMocks();
   });
 
-  it("exports contract metric and span names", () => {
-    expect(CONTRACT_METRIC_NAMES).toEqual(
-      expect.arrayContaining([
-        "bot_updates_total",
-        "bot_commands_total",
-        "bot_handler_duration_seconds",
-        "bot_errors_total",
-        "bot_inflight",
-        "bot_jobs_total",
-        "bot_job_duration_seconds",
-        "bot_job_bytes_total",
-      ]),
-    );
+  it("exports only contract metric and span names", () => {
+    expect(CONTRACT_METRIC_NAMES).toEqual([
+      "bot_updates_total",
+      "bot_handler_duration_seconds",
+      "bot_errors_total",
+      "bot_up",
+    ]);
     expect(CONTRACT_SPAN_NAMES.handleUpdate).toBe("bot.handle_update");
     expect(CONTRACT_SPAN_NAMES.jobAgent).toBe("bot.job.agent");
     expect(CONTRACT_SPAN_NAMES.jobVision).toBe("bot.job.vision");
@@ -47,25 +39,41 @@ describe("telemetry/botMetrics", () => {
     expect(classifyErrorType(new Error("OpenAI rate limit"))).toBe("openai");
     expect(classifyErrorType(new Error("gmail oauth failed"))).toBe("gmail");
     expect(classifyErrorType(new Error("boom"))).toBe("unknown");
+    expect(classifyErrorType(new HandledUpdateError("openai"))).toBe("openai");
   });
 
   it("metric helpers do not throw without a real SDK", () => {
     expect(() => {
-      beginInflight("message");
+      setBotUp(1);
       trackUpdate({
-        update_kind: "message",
         handler: "message",
         result: "success",
         durationSec: 0.01,
       });
-      endInflight("message");
-      trackCommand({ command: "/start", result: "success" });
-      trackError({ error_type: "unknown", handler: "message" });
-      trackJob({ job: "agent", result: "success", durationSec: 0.02 });
+      trackUpdate({
+        handler: "message",
+        result: "error",
+        durationSec: 0.02,
+        error_type: "unknown",
+      });
+      trackUpdate({
+        handler: "message",
+        result: "skipped",
+        durationSec: 0,
+      });
+      trackError({ error_type: "telegram", handler: "message" });
+      setBotUp(0);
     }).not.toThrow();
   });
 
-  it("withJob runs work under bot.job.* span name", async () => {
-    await expect(withJob("agent", async () => "ok")).resolves.toBe("ok");
+  it("withJobSpan runs work under bot.job.* span name", async () => {
+    await expect(withJobSpan("agent", async () => "ok")).resolves.toBe("ok");
+  });
+
+  it("HandledUpdateError preserves errorType", () => {
+    const err = new HandledUpdateError("gmail", new Error("oauth failed"));
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe("HandledUpdateError");
+    expect(err.errorType).toBe("gmail");
   });
 });

@@ -21,7 +21,7 @@ import {
   formatGmailSearchSessionContext,
   getGmailSearchSession,
 } from "../services/gmail/gmailSearchSession";
-import { withJob } from "../telemetry/botMetrics";
+import { withJobSpan } from "../telemetry/botMetrics";
 import { Logger } from "../telemetry/logger";
 import { getTracer } from "../telemetry/otel";
 import { fromDate } from "../util";
@@ -453,7 +453,7 @@ async function runAgentInner(telegramId: number, userText: string): Promise<Agen
 }
 
 export async function runAgent(telegramId: number, userText: string): Promise<AgentResult> {
-  return withJob("agent", async () => {
+  return withJobSpan("agent", async () => {
     const span = trace.getActiveSpan();
     span?.setAttribute("telegram.id", telegramId);
     span?.setAttribute("user.text_len", userText.length);

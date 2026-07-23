@@ -14,10 +14,15 @@ Before shipping telemetry changes, fetch or re-read that doc (raw: https://raw.g
 ## Must follow
 
 - Export **only** to Alloy via OTLP (`OTEL_EXPORTER_OTLP_ENDPOINT`). Never point exporters at Loki, Tempo, or Mimir URLs.
-- Set resource attributes: `service.name` (kebab-case, no version), `service.namespace`, `service.version`, `deployment.environment` (`production` | `staging` | `local`).
-- Bot metrics use the `bot_` prefix and contract names (`bot_updates_total`, `bot_commands_total`, `bot_handler_duration_seconds`, `bot_errors_total`, `bot_inflight`, plus job metrics when applicable). Prefer contract names over parallel custom metrics for the same idea.
-- Metric labels: low-cardinality enums only (`result`, `command`, `handler`, `job`, `error_type`, …). Never put `user_id`, `chat_id`, URLs, paths, free-text errors, or trace ids on metric labels.
-- Span names follow `bot.handle_update`, `bot.command`, `bot.job.<name>`. On failure: `recordException` + error status. Propagate `trace_id` into logs.
+- Set resource attributes: `service.name` (kebab-case, no version), `service.namespace`, `service.version` (optional but recommended), `deployment.environment` (`production` | `staging` | `local`). Prefer `deployment.environment` over `deployment.environment.name`.
+- Emit all required bot metrics (prefix `bot_`); do not invent parallel names for the same idea:
+  - `bot_updates_total` (counter, label `result`)
+  - `bot_handler_duration_seconds` (histogram, optional `handler`, `result`)
+  - `bot_errors_total` (counter, optional `error_type`, `handler`)
+  - `bot_up` (gauge, no labels; `1` while healthy)
+- Metric labels: only low-cardinality enums from the contract — `result` (`success` | `error` | `skipped`), `handler`, `error_type`. Never put `user_id`, `chat_id`, `message_id`, URLs, paths, free-text errors, or trace/request ids on metric labels.
+- Root span per Telegram update: `bot.handle_update`. Span attributes may be richer than metric labels (`result`, `error.type`, sizes) but avoid raw PII. On failure: `recordException` + error status. Propagate `trace_id` into logs.
+- Emit OTEL logs (not console-only) with `severityText` (`DEBUG`/`INFO`/`WARN`/`ERROR`; prefer uppercase). Prefer structured attributes (`handler`, `result`, `error_type`). Do not promote high-cardinality fields to Loki stream labels; keep streams on `service_name` / `service_namespace`.
 - Export failures must not block business logic (warn and continue).
 
 ## Out of scope
