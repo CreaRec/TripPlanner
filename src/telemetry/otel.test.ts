@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isTelemetrySdkActive,
   isTelemetryStarted,
+  metricExportTiming,
   resetTelemetryForTests,
   shutdownTelemetry,
   startTelemetry,
@@ -14,6 +15,8 @@ describe("telemetry/otel", () => {
     resetTelemetryForTests();
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     delete process.env.OTEL_SDK_DISABLED;
+    delete process.env.OTEL_METRIC_EXPORT_INTERVAL;
+    delete process.env.OTEL_METRIC_EXPORT_TIMEOUT;
     vi.restoreAllMocks();
   });
 
@@ -49,5 +52,30 @@ describe("telemetry/otel", () => {
     await expect(
       withSpan("test.span", { "telegram.id": 1 }, async () => "ok"),
     ).resolves.toBe("ok");
+  });
+
+  it("metricExportTiming defaults to 10s interval with shorter timeout", () => {
+    expect(metricExportTiming()).toEqual({
+      exportIntervalMillis: 10_000,
+      exportTimeoutMillis: 5_000,
+    });
+  });
+
+  it("metricExportTiming honours OTEL_METRIC_EXPORT_INTERVAL and caps timeout", () => {
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "5000";
+    process.env.OTEL_METRIC_EXPORT_TIMEOUT = "8000";
+    expect(metricExportTiming()).toEqual({
+      exportIntervalMillis: 5_000,
+      exportTimeoutMillis: 4_000,
+    });
+  });
+
+  it("metricExportTiming ignores non-positive env values", () => {
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "0";
+    process.env.OTEL_METRIC_EXPORT_TIMEOUT = "-1";
+    expect(metricExportTiming()).toEqual({
+      exportIntervalMillis: 10_000,
+      exportTimeoutMillis: 5_000,
+    });
   });
 });

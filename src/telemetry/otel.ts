@@ -15,6 +15,9 @@ import { Logger } from "./logger";
 
 const TRACER_NAME = "crea-trip-planner";
 const METER_NAME = "crea-trip-planner";
+/** Default metric push cadence (OTEL SDK default is 60s — too slow for bot dashboards). */
+const DEFAULT_METRIC_EXPORT_INTERVAL_MS = 10_000;
+const DEFAULT_METRIC_EXPORT_TIMEOUT_MS = 5_000;
 const log = new Logger("telemetry");
 
 let sdk: NodeSDK | null = null;
@@ -46,6 +49,30 @@ function readDeploymentEnvironment(): string {
   if (nodeEnv === "staging") return "staging";
   if (nodeEnv === "production") return "production";
   return nodeEnv || "production";
+}
+
+/** Positive millis from env, or `fallback`. Honours standard OTEL_* metric export knobs. */
+function readPositiveMillis(envName: string, fallback: number): number {
+  const raw = process.env[envName]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Exposed for tests. */
+export function metricExportTiming(): {
+  exportIntervalMillis: number;
+  exportTimeoutMillis: number;
+} {
+  const exportIntervalMillis = readPositiveMillis(
+    "OTEL_METRIC_EXPORT_INTERVAL",
+    DEFAULT_METRIC_EXPORT_INTERVAL_MS,
+  );
+  const exportTimeoutMillis = Math.min(
+    readPositiveMillis("OTEL_METRIC_EXPORT_TIMEOUT", DEFAULT_METRIC_EXPORT_TIMEOUT_MS),
+    Math.max(1_000, exportIntervalMillis - 1_000),
+  );
+  return { exportIntervalMillis, exportTimeoutMillis };
 }
 
 export async function startTelemetry(): Promise<void> {
@@ -85,6 +112,7 @@ export async function startTelemetry(): Promise<void> {
       metricReaders: [
         new PeriodicExportingMetricReader({
           exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
+          ...metricExportTiming(),
         }),
       ],
       logRecordProcessors: [
