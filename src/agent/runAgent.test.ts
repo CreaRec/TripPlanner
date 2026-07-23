@@ -181,11 +181,8 @@ describe("runAgent", () => {
     const result = await runAgent(111, "go");
     expect(result.reply).toBe("Sorry, that failed.");
     expect(consoleError).toHaveBeenCalledWith("[agent] tool call failed", {
-      telegram_id: 111,
       tool: "create_trip",
-      iteration: 1,
       error: "boom",
-      duration_ms: expect.any(Number),
     });
     consoleError.mockRestore();
   });

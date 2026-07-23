@@ -16,10 +16,6 @@ import {
 } from "../services/gmail/gmailClient";
 import { upsertAccount } from "../services/gmail/gmailAccounts";
 import { buildOAuthStartUrl } from "../services/gmail/gmailUrls";
-import { Logger } from "../telemetry/logger";
-
-const oauthLog = new Logger("oauth");
-const httpLog = new Logger("http");
 
 function htmlPage(title: string, body: string): string {
   return `<!DOCTYPE html>
@@ -131,11 +127,9 @@ async function handleGoogleCallback(
   }
 
   try {
-    oauthLog.info("callback start", { telegram_id: consumed.telegramId });
     const tokens = await exchangeCodeForTokens(code);
     const googleEmail = await fetchGoogleEmail(tokens.accessToken);
     await upsertAccount(consumed.telegramId, googleEmail, tokens);
-    oauthLog.info("callback success", { telegram_id: consumed.telegramId });
     sendHtml(
       res,
       200,
@@ -146,10 +140,7 @@ async function handleGoogleCallback(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    oauthLog.error("callback failed", {
-      telegram_id: consumed.telegramId,
-      error: message,
-    });
+    console.error("[oauth] callback failed:", message);
     sendHtml(
       res,
       500,
@@ -192,7 +183,7 @@ export function createHttpServer(): Server {
 
         sendText(res, 404, "Not found");
       } catch (err) {
-        httpLog.error("request failed:", err);
+        console.error("[http] request failed:", err);
         sendText(res, 500, "Internal server error");
       }
     })();
