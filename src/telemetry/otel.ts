@@ -7,7 +7,6 @@ import { BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
-  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_NAMESPACE,
   ATTR_SERVICE_VERSION,
@@ -70,11 +69,12 @@ export async function startTelemetry(): Promise<void> {
   const deploymentEnvironment = readDeploymentEnvironment();
   const serviceVersion = readServiceVersion();
 
+  // CreaGrafana contract: deployment.environment → Prometheus deployment_environment
   const resource = resources.resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
     [ATTR_SERVICE_NAMESPACE]: serviceNamespace,
     [ATTR_SERVICE_VERSION]: serviceVersion,
-    [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: deploymentEnvironment,
+    "deployment.environment": deploymentEnvironment,
   });
 
   try {
