@@ -21,7 +21,7 @@ import {
   getGmailSearchSession,
 } from "../services/gmail/gmailSearchSession";
 import { fromDate } from "../util";
-import { logger } from "../log";
+import { logger, truncateForLog } from "../log";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 import { AgentContext, toolDefinitions, toolHandlers } from "./tools";
 import { extractMemories } from "./memory";
@@ -227,6 +227,7 @@ export async function runAgent(telegramId: number, userText: string): Promise<Ag
     has_active_trip: activeTripId !== null,
     pending_destructive: Boolean(pendingDelete),
     text_chars: userText.length,
+    user_text: truncateForLog(userText),
   });
 
   if (pendingDelete && isDestructiveCancellation(userText)) {

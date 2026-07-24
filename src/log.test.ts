@@ -20,28 +20,43 @@ describe("logger", () => {
     vi.restoreAllMocks();
   });
 
-  it("mirrors to console and emits OTEL logs with severity and trace_id", async () => {
+  it("mirrors to console and emits OTEL logs with severity, body summary, and trace_id", async () => {
     const emit = vi.fn();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const { bindOtelLogger, logger } = await import("./log");
     bindOtelLogger({ emit });
 
-    logger.info("[test] hello", { component: "test", step: "start" });
+    logger.info("[test] hello", {
+      component: "test",
+      step: "start",
+      handler: "agent",
+      user_text: "plan paris",
+    });
 
     expect(logSpy).toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith(
       expect.objectContaining({
         severityText: "INFO",
-        body: "[test] hello",
+        body: "[test] hello handler=agent step=start user_text=plan paris",
         attributes: expect.objectContaining({
           component: "test",
           step: "start",
+          handler: "agent",
+          user_text: "plan paris",
           trace_id: "trace-log-1",
         }),
       }),
     );
 
     bindOtelLogger(null);
+  });
+
+  it("truncates long user text for log previews", async () => {
+    const { truncateForLog, LOG_USER_TEXT_MAX } = await import("./log");
+    const long = "a".repeat(LOG_USER_TEXT_MAX + 50);
+    const preview = truncateForLog(long);
+    expect(preview.length).toBe(LOG_USER_TEXT_MAX);
+    expect(preview.endsWith("…")).toBe(true);
   });
 
   it("falls back to console when OTEL logger is unbound", async () => {

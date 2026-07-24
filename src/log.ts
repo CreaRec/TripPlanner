@@ -4,6 +4,9 @@ export type LogSeverity = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
 export type LogAttributes = Record<string, string | number | boolean | undefined>;
 
+/** Max chars for user request previews in logs (body + attribute). */
+export const LOG_USER_TEXT_MAX = 200;
+
 type TelemetryLogger = {
   emit(record: {
     severityText: string;
@@ -19,6 +22,13 @@ export function bindOtelLogger(logger: TelemetryLogger | null): void {
   otelLogger = logger;
 }
 
+/** Collapse whitespace and trim for log previews; appends … when truncated. */
+export function truncateForLog(text: string, max = LOG_USER_TEXT_MAX): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1))}…`;
+}
+
 function toStringAttrs(attributes: LogAttributes): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(attributes)) {
@@ -30,6 +40,27 @@ function toStringAttrs(attributes: LogAttributes): Record<string, string> {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Keys appended into the log body so Grafana "Recent logs" panels stay readable. */
+const BODY_ATTR_KEYS = [
+  "handler",
+  "result",
+  "tool",
+  "step",
+  "duration_ms",
+  "user_text",
+  "error_type",
+] as const;
+
+function formatBody(message: string, attrs: Record<string, string>): string {
+  const parts: string[] = [];
+  for (const key of BODY_ATTR_KEYS) {
+    if (attrs[key] !== undefined && attrs[key] !== "") {
+      parts.push(`${key}=${attrs[key]}`);
+    }
+  }
+  return parts.length > 0 ? `${message} ${parts.join(" ")}` : message;
 }
 
 /**
@@ -45,7 +76,8 @@ export function log(severity: LogSeverity, message: string, attributes: LogAttri
     attrs.trace_id = traceId;
   }
 
-  const consolePayload = Object.keys(attrs).length > 0 ? `${message} ${JSON.stringify(attrs)}` : message;
+  const body = formatBody(message, attrs);
+  const consolePayload = Object.keys(attrs).length > 0 ? `${body} ${JSON.stringify(attrs)}` : body;
   switch (severity) {
     case "ERROR":
       console.error(consolePayload);
@@ -64,7 +96,7 @@ export function log(severity: LogSeverity, message: string, attributes: LogAttri
   try {
     otelLogger.emit({
       severityText: severity,
-      body: message,
+      body,
       attributes: attrs,
     });
   } catch (err) {

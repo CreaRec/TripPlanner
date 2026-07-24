@@ -24,7 +24,8 @@ When creating or changing code, explicitly check whether the change introduces o
 - Do **not** use `console.log` / `console.warn` / `console.error` / `console.debug` for application logging.
 - Use `logger` from `src/log.ts` (`info` / `warn` / `error` / `exception` / `debug`). It mirrors to console and emits OTEL logs with `severityText`.
 - Prefer structured attributes: `component`, `handler`, `step`, `result`, `error_type`, `duration_ms`, `tool`. Attach `trace_id` via the active span (automatic).
-- Never put Telegram user IDs, chat IDs, raw message text, emails, URLs, or full filesystem paths in metric labels; keep log attributes low-detail when possible (counts/enums, not payloads).
+- Never put Telegram user IDs, chat IDs, emails, URLs, or full filesystem paths in **metric labels**.
+- Initial user request text may be logged once (bot route / agent start) via `user_text` using `truncateForLog` (default 200 chars). Do not log full conversation history or tool payloads.
 - For multi-step request chains (bot → agent → tools → reply), log start/step/finish so Loki can reconstruct the path by `trace_id`.
 
 Before finishing any code change, verify whether telemetry was needed and either implement it or confirm the existing global instrumentation already covers the path.

@@ -12,7 +12,7 @@ import {
 } from "../services/gmail/gmailIntents";
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
-import { logger } from "../log";
+import { logger, truncateForLog } from "../log";
 import {
   markUpdateError,
   markUpdateSkipped,
@@ -308,6 +308,7 @@ export function createBot(): Telegraf {
         component: "bot",
         handler: "photo",
         step: "agent",
+        user_text: truncateForLog(ctx.message.caption ?? "(image)"),
       });
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
@@ -359,6 +360,7 @@ export function createBot(): Telegraf {
         component: "bot",
         handler: "document",
         step: "agent",
+        user_text: truncateForLog(ctx.message.caption ?? "(image)"),
       });
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
@@ -426,6 +428,7 @@ export function createBot(): Telegraf {
       handler: "agent",
       step: "start",
       text_chars: text.length,
+      user_text: truncateForLog(text),
     });
     await ctx.sendChatAction("typing");
     const typingTimer = setInterval(() => {
