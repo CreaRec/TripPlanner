@@ -102,6 +102,17 @@ chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
    need (Places, Routes, Static Maps, Weather), restrict the key, and set a small budget alert.
    Weather is fetched only when you ask the bot about conditions or a forecast.
 
+   `@crearec/otel` is installed from GitHub Packages. For a fresh `npm ci` / `npm install`, set a
+   token with `read:packages` (and SSO authorized if needed):
+
+   ```bash
+   export NODE_AUTH_TOKEN=ghp_...   # classic PAT or fine-grained with packages read
+   npm ci
+   ```
+
+   The committed `.npmrc` maps `@crearec` to `https://npm.pkg.github.com`. Telemetry defaults to
+   Alloy at `OTEL_EXPORTER_OTLP_ENDPOINT` (see [telemetry contract](https://github.com/CreaRec/CreaGrafana/blob/main/docs/telemetry-contract.md)).
+
 2. Start everything locally (boots Postgres in Docker, applies Prisma migrations, starts the bot in watch mode):
 
    ```bash

@@ -4,8 +4,14 @@ import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
 import { createHttpServer } from "./http/server";
 import { scheduleExportRetention } from "./services/export/exportRetention";
+import { shutdownTelemetry, startTelemetry } from "./telemetry";
 
 async function main(): Promise<void> {
+  const tel = startTelemetry();
+  console.log(
+    `[startup] telemetry ready service.name=${tel.serviceName} service.namespace=${tel.serviceNamespace}`,
+  );
+
   console.log("[startup] verifying database connection...");
   await pingDatabase();
   console.log("[startup] database reachable.");
@@ -39,6 +45,7 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
     }
     await disconnect();
+    await shutdownTelemetry();
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
@@ -46,14 +53,16 @@ async function main(): Promise<void> {
 
   console.log("[startup] launching Telegram bot...");
   // bot.launch() resolves only when the bot stops, so we don't await it here.
-  bot.launch().catch((err) => {
+  bot.launch().catch(async (err) => {
     console.error("[fatal] bot stopped with error:", err);
+    await shutdownTelemetry();
     process.exit(1);
   });
   console.log("[startup] bot is running.");
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error("[fatal] failed to start:", err);
+  await shutdownTelemetry();
   process.exit(1);
 });

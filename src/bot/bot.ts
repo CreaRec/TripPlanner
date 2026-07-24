@@ -1,4 +1,5 @@
 import { Telegraf } from "telegraf";
+import type { Context } from "telegraf";
 import { message } from "telegraf/filters";
 import { config, isGmailOAuthConfigured } from "../config";
 import { runAgent } from "../agent/runAgent";
@@ -11,6 +12,12 @@ import {
 } from "../services/gmail/gmailIntents";
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
+import {
+  markUpdateError,
+  markUpdateSkipped,
+  setUpdateHandler,
+  telemetryMiddleware,
+} from "../telemetry";
 
 async function sendAgentResult(
   ctx: {
@@ -138,6 +145,7 @@ export function createBot(): Telegraf {
 
   bot.catch((err, ctx) => {
     console.error("[bot] unhandled error:", err);
+    // Metrics/logs for propagated errors are recorded by telemetryMiddleware.
     const message =
       err instanceof Error && err.name === "TimeoutError"
         ? "Запрос занял слишком много времени. Попробуйте ещё раз."
@@ -147,12 +155,18 @@ export function createBot(): Telegraf {
     });
   });
 
+  bot.use(telemetryMiddleware());
+
   // Whitelist middleware: only allowed Telegram IDs may use the bot.
   bot.use(async (ctx, next) => {
     const from = ctx.from;
-    if (!from) return;
+    if (!from) {
+      markUpdateSkipped(ctx, "auth");
+      return;
+    }
     const allowed = config.allowedTelegramIds;
     if (allowed.length > 0 && !allowed.includes(from.id)) {
+      markUpdateSkipped(ctx, "auth");
       await ctx.reply("Sorry, you are not authorized to use this bot.");
       return;
     }
@@ -162,6 +176,7 @@ export function createBot(): Telegraf {
   });
 
   bot.start(async (ctx) => {
+    setUpdateHandler(ctx, "start");
     await ctx.reply(
       [
         "Hi! I'm your trip planner.",
@@ -174,6 +189,7 @@ export function createBot(): Telegraf {
   });
 
   bot.help(async (ctx) => {
+    setUpdateHandler(ctx, "help");
     await ctx.reply(
       [
         "Talk to me in plain language to plan a trip.",
@@ -193,9 +209,14 @@ export function createBot(): Telegraf {
     );
   });
 
-  async function replyConnectGmail(ctx: { from: { id: number }; reply: (text: string) => Promise<unknown> }): Promise<void> {
+  async function replyConnectGmail(ctx: Context): Promise<void> {
+    setUpdateHandler(ctx, "gmail_connect");
     if (!isGmailOAuthConfigured()) {
       await ctx.reply("Gmail OAuth is not configured on this server yet.");
+      return;
+    }
+    if (!ctx.from) {
+      markUpdateSkipped(ctx, "gmail_connect");
       return;
     }
     try {
@@ -210,11 +231,13 @@ export function createBot(): Telegraf {
       );
     } catch (err) {
       console.error("[bot] connect gmail error:", err);
+      markUpdateError(ctx, err, { errorType: "unknown", handler: "gmail_connect" });
       await ctx.reply("Could not start Gmail connection. Please try again.");
     }
   }
 
   bot.on(message("photo"), async (ctx) => {
+    setUpdateHandler(ctx, "photo");
     await ctx.sendChatAction("typing");
     try {
       const photo = ctx.message.photo.at(-1);
@@ -236,11 +259,13 @@ export function createBot(): Telegraf {
       await sendAgentResult(ctx, result);
     } catch (err) {
       console.error("[bot] image parsing error:", err);
+      markUpdateError(ctx, err, { handler: "photo" });
       await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
     }
   });
 
   bot.on(message("document"), async (ctx) => {
+    setUpdateHandler(ctx, "document");
     const document = ctx.message.document;
     const mimeType = document.mime_type ?? "";
     if (!mimeType.startsWith("image/")) {
@@ -264,13 +289,17 @@ export function createBot(): Telegraf {
       await sendAgentResult(ctx, result);
     } catch (err) {
       console.error("[bot] image parsing error:", err);
+      markUpdateError(ctx, err, { handler: "document" });
       await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
     }
   });
 
   bot.on(message("text"), async (ctx) => {
     const text = ctx.message.text;
-    if (text.startsWith("/")) return; // unknown command; ignore
+    if (text.startsWith("/")) {
+      markUpdateSkipped(ctx, "command");
+      return; // unknown command; ignore
+    }
 
     if (isConnectGmailRequest(text)) {
       await replyConnectGmail(ctx);
@@ -279,6 +308,7 @@ export function createBot(): Telegraf {
 
     const exportRequest = parseExportGmailByNumberRequest(text);
     if (exportRequest !== null) {
+      setUpdateHandler(ctx, "gmail_export");
       await ctx.sendChatAction("upload_document");
       try {
         const handled = await replyDirectGmailExport(ctx, exportRequest.index, {
@@ -287,11 +317,13 @@ export function createBot(): Telegraf {
         if (handled) return;
       } catch (err) {
         console.error("[bot] direct gmail export error:", err);
+        markUpdateError(ctx, err, { handler: "gmail_export" });
         await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
         return;
       }
     }
 
+    setUpdateHandler(ctx, "agent");
     await ctx.sendChatAction("typing");
     const typingTimer = setInterval(() => {
       void ctx.sendChatAction("typing");
@@ -301,6 +333,7 @@ export function createBot(): Telegraf {
       await sendAgentResult(ctx, result);
     } catch (err) {
       console.error("[bot] agent error:", err);
+      markUpdateError(ctx, err, { handler: "agent" });
       await ctx.reply("Something went wrong while planning. Please try again.");
     } finally {
       clearInterval(typingTimer);

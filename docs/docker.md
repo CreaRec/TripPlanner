@@ -17,6 +17,8 @@ App secrets stay on the server in `.env`. Postgres data stays in `./data/postgre
 
 On container start the bot entrypoint runs `prisma migrate deploy`, then `node dist/index.js`.
 
+OpenTelemetry goes to CreaGrafana Alloy on the external Docker network `lgtm` (`OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318`). Ensure `docker network create lgtm` exists on the host (CreaGrafana compose also uses it). Follow the [telemetry contract](https://github.com/CreaRec/CreaGrafana/blob/main/docs/telemetry-contract.md).
+
 ## One-time server bootstrap
 
 The Postgres container (`crea-trip-planner-db`) is already running in the `crea-trip-planner` stack. Do **not** create a new database or change the volume path. Add the bot to the same stack.
@@ -41,6 +43,10 @@ Add to `.env` (keep existing secrets):
 ```sh
 IMAGE=ghcr.io/crearec/crea-trip-planner
 IMAGE_TAG=main
+OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318
+OTEL_SERVICE_NAME=crea-trip-planner
+OTEL_SERVICE_NAMESPACE=bots
+DEPLOY_ENV=production
 ```
 
 `DATABASE_URL` may still point at `localhost` for historical reasons; Compose overrides it for the `bot` service to use host `db`.

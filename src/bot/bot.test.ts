@@ -72,9 +72,16 @@ vi.mock("../config", () => ({
   config: { allowedTelegramIds: [111] },
   isGmailOAuthConfigured: vi.fn().mockReturnValue(true),
 }));
+vi.mock("../telemetry", () => ({
+  telemetryMiddleware: () => async (_ctx: unknown, next: () => unknown) => next(),
+  markUpdateSkipped: vi.fn(),
+  markUpdateError: vi.fn(),
+  setUpdateHandler: vi.fn(),
+}));
 
 import { createBot } from "./bot";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
+import { markUpdateSkipped } from "../telemetry";
 
 interface FakeTelegrafHandlers {
   use: Array<(ctx: unknown, next: () => unknown) => unknown>;
@@ -108,6 +115,7 @@ function handler(kind: string) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({
@@ -122,16 +130,17 @@ describe("whitelist middleware", () => {
     const h = bot();
     const ctx = fakeCtx({ from: { id: 999 } });
     const next = vi.fn();
-    await h.use[0](ctx, next);
+    await h.use[1](ctx, next);
     expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("not authorized"));
     expect(next).not.toHaveBeenCalled();
+    expect(markUpdateSkipped).toHaveBeenCalledWith(ctx, "auth");
   });
 
   it("admits whitelisted users and ensures the user row", async () => {
     const h = bot();
     const ctx = fakeCtx({ from: { id: 111, first_name: "Alice" } });
     const next = vi.fn();
-    await h.use[0](ctx, next);
+    await h.use[1](ctx, next);
     expect(f.ensureUser).toHaveBeenCalledWith(111, "Alice");
     expect(next).toHaveBeenCalled();
   });

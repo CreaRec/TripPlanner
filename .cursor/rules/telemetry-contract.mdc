@@ -1,0 +1,22 @@
+---
+description: Require CreaGrafana telemetry contract compliance whenever code changes need observability
+alwaysApply: true
+---
+
+# Telemetry Contract
+
+When creating or changing code, explicitly check whether the change introduces or modifies a handler, request/update path, error path, external call, logging, startup/shutdown behavior, or deployment configuration. If so, add or update telemetry in the same change.
+
+- Read and follow https://github.com/CreaRec/CreaGrafana/blob/main/docs/telemetry-contract.md.
+- Use `@crearec/otel`; TripPlanner wiring is in `src/telemetry.ts`.
+- Send OTLP only to Alloy. Never send directly to Loki, Tempo, or Mimir.
+- Keep `service.name=crea-trip-planner`, `service.namespace=bots`, and set the deployment environment.
+- Every handled Telegram update must emit `bot_updates_total` and `bot_handler_duration_seconds` together through `recordHandledUpdate`, including `success`, `error`, and `skipped`.
+- Record application failures in `bot_errors_total`; use `bot.handle_update` spans and OTEL logs with explicit severity.
+- Measure durations in seconds.
+- Metric labels must remain low-cardinality: `result`, `handler`, and `error_type`. Never use IDs, URLs, paths, filenames, trace IDs, or free-text errors as metric labels.
+- Telemetry failures must not block business logic.
+- New Telegram paths must use the global telemetry middleware, set a short handler enum, and mark skipped or caught-error outcomes where appropriate.
+- Add or update tests whenever telemetry behavior changes.
+
+Before finishing any code change, verify whether telemetry was needed and either implement it or confirm the existing global instrumentation already covers the path.

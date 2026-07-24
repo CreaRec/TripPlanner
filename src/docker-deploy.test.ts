@@ -15,6 +15,10 @@ describe("docker deploy contract", () => {
     expect(compose).toMatch(/IMAGE_TAG/);
     expect(compose).toMatch(/\.\/data\/exports:\/app\/data\/exports/);
     expect(compose).toMatch(/127\.0\.0\.1:\$\{HTTP_PORT:-3000\}:3000/);
+    expect(compose).toMatch(/OTEL_EXPORTER_OTLP_ENDPOINT/);
+    expect(compose).toMatch(/OTEL_SERVICE_NAME/);
+    expect(compose).toMatch(/OTEL_SERVICE_NAMESPACE/);
+    expect(compose).toMatch(/lgtm:\s*\n\s*external:\s*true/);
     expect(compose).not.toMatch(/^\s*build:/m);
   });
 
@@ -25,6 +29,8 @@ describe("docker deploy contract", () => {
     );
 
     expect(workflow).toMatch(/packages:\s*write/);
+    expect(workflow).toMatch(/packages:\s*read/);
+    expect(workflow).toMatch(/NODE_AUTH_TOKEN/);
     expect(workflow).toMatch(/ghcr\.io\/crearec\/crea-trip-planner/);
     expect(workflow).toMatch(/node-version:\s*"24"/);
     expect(workflow).toMatch(/tailscale\/github-action/);
@@ -38,11 +44,13 @@ describe("docker deploy contract", () => {
     expect(workflow).not.toMatch(/scripts\/deploy\.sh/);
   });
 
-  it("Dockerfile uses Node 24 bookworm-slim for build and runtime", async () => {
+  it("Dockerfile uses Node 24 bookworm-slim and GitHub Packages auth for npm ci", async () => {
     const dockerfile = await readFile(path.join(repoRoot, "Dockerfile"), "utf8");
 
     expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim AS build$/m);
     expect(dockerfile).toMatch(/^FROM node:24-bookworm-slim AS runtime$/m);
+    expect(dockerfile).toMatch(/NODE_AUTH_TOKEN/);
+    expect(dockerfile).toMatch(/COPY \.npmrc package\.json package-lock\.json/);
   });
 });
 
