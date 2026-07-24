@@ -6,6 +6,7 @@ import {
   type BotResult,
   type BotTelemetryHandle,
 } from "@crearec/otel";
+import { bindOtelLogger, logger } from "./log";
 
 const SERVICE_NAME = "crea-trip-planner";
 const SERVICE_NAMESPACE = "bots";
@@ -52,6 +53,16 @@ function inferHandler(ctx: Context): string {
   return "message";
 }
 
+function inferUpdateKind(ctx: Context): string {
+  if (ctx.callbackQuery) return "callback_query";
+  const msg = ctx.message;
+  if (!msg) return "other";
+  if ("text" in msg) return "text";
+  if ("photo" in msg) return "photo";
+  if ("document" in msg) return "document";
+  return "message";
+}
+
 function classifyError(err: unknown): string {
   if (err && typeof err === "object" && "name" in err && err.name === "TimeoutError") {
     return "timeout";
@@ -61,23 +72,6 @@ function classifyError(err: unknown): string {
   if (/telegram|403|429|ECONNREFUSED/i.test(message)) return "telegram";
   if (/ENOENT|EACCES|EPERM|filesystem|no such file/i.test(message)) return "fs";
   return "unknown";
-}
-
-function emitLog(
-  tel: BotTelemetryHandle,
-  severityText: "DEBUG" | "INFO" | "WARN" | "ERROR",
-  body: string,
-  attributes: Record<string, string>,
-): void {
-  try {
-    tel.logger.emit({
-      severityText,
-      body,
-      attributes,
-    });
-  } catch (err) {
-    console.warn("[telemetry] log emit failed:", err);
-  }
 }
 
 /** Bootstrap OTLP → Alloy. Safe to call once at process start. */
@@ -98,6 +92,7 @@ export function startTelemetry(): BotTelemetryHandle {
   }
 
   tel.bot.setUp(true);
+  bindOtelLogger(tel.logger);
   telemetry = tel;
   return tel;
 }
@@ -112,6 +107,7 @@ export function getTelemetry(): BotTelemetryHandle {
 export async function shutdownTelemetry(): Promise<void> {
   if (!telemetry) return;
   telemetry.bot.setUp(false);
+  bindOtelLogger(null);
   await telemetry.shutdown();
   telemetry = null;
 }
@@ -160,18 +156,17 @@ export function markUpdateError(
   }
 
   try {
-    const tel = getTelemetry();
-    tel.bot.recordError({ errorType, handler });
-    const traceId = activeSpan?.spanContext().traceId;
-    emitLog(tel, "ERROR", `[bot] handler error handler=${handler} error_type=${errorType}`, {
-      handler,
-      result: "error",
-      error_type: errorType,
-      ...(traceId ? { trace_id: traceId } : {}),
-    });
+    getTelemetry().bot.recordError({ errorType, handler });
   } catch {
-    // Telemetry must not break business logic (tests without startTelemetry, export failures).
+    // Telemetry must not break business logic (tests without startTelemetry).
   }
+
+  logger.exception("[bot] handler error", err, {
+    component: "bot",
+    handler,
+    result: "error",
+    error_type: errorType,
+  });
 }
 
 /**
@@ -190,6 +185,14 @@ export function telemetryMiddleware(): MiddlewareFn<Context> {
     await tel.tracer.startActiveSpan("bot.handle_update", async (span) => {
       const started = process.hrtime.bigint();
       const traceId = span.spanContext().traceId;
+      const updateKind = inferUpdateKind(ctx);
+
+      logger.info("[bot] update started", {
+        component: "bot",
+        handler: state.handler,
+        update_kind: updateKind,
+        step: "start",
+      });
 
       try {
         await next();
@@ -204,17 +207,13 @@ export function telemetryMiddleware(): MiddlewareFn<Context> {
           } catch {
             // ignore
           }
-          emitLog(
-            tel,
-            "ERROR",
-            `[bot] update failed handler=${state.handler} error_type=${errorType} trace_id=${traceId}`,
-            {
-              handler: state.handler,
-              result: "error",
-              error_type: errorType,
-              trace_id: traceId,
-            },
-          );
+          logger.exception("[bot] update failed", err, {
+            component: "bot",
+            handler: state.handler,
+            result: "error",
+            error_type: errorType,
+            step: "failed",
+          });
         }
         if (err instanceof Error) {
           span.recordException(err);
@@ -230,21 +229,22 @@ export function telemetryMiddleware(): MiddlewareFn<Context> {
             handler: state.handler,
           });
         } catch (err) {
-          console.warn("[telemetry] metric emit failed:", err);
+          logger.warn("[telemetry] metric emit failed", {
+            component: "telemetry",
+            error_message: err instanceof Error ? err.message : String(err),
+          });
         }
 
-        if (state.result !== "error") {
-          emitLog(
-            tel,
-            "INFO",
-            `[bot] update handled handler=${state.handler} result=${state.result} trace_id=${traceId}`,
-            {
-              handler: state.handler,
-              result: state.result,
-              trace_id: traceId,
-            },
-          );
-        }
+        logger.info("[bot] update finished", {
+          component: "bot",
+          handler: state.handler,
+          result: state.result,
+          duration_ms: Math.round(durationSeconds * 1000),
+          update_kind: updateKind,
+          step: "finish",
+          ...(state.errorType ? { error_type: state.errorType } : {}),
+          trace_id: traceId,
+        });
 
         span.setAttribute("result", state.result);
         span.setAttribute("handler", state.handler);

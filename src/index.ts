@@ -3,22 +3,26 @@ import { config, isGmailOAuthConfigured } from "./config";
 import { createBot } from "./bot/bot";
 import { disconnect, pingDatabase } from "./db/prisma";
 import { createHttpServer } from "./http/server";
+import { logger } from "./log";
 import { scheduleExportRetention } from "./services/export/exportRetention";
 import { shutdownTelemetry, startTelemetry } from "./telemetry";
 
 async function main(): Promise<void> {
   const tel = startTelemetry();
-  console.log(
-    `[startup] telemetry ready service.name=${tel.serviceName} service.namespace=${tel.serviceNamespace}`,
-  );
+  logger.info("[startup] telemetry ready", {
+    component: "startup",
+    service_name: tel.serviceName,
+    service_namespace: tel.serviceNamespace,
+  });
 
-  console.log("[startup] verifying database connection...");
+  logger.info("[startup] verifying database connection...", { component: "startup", step: "db_ping" });
   await pingDatabase();
-  console.log("[startup] database reachable.");
+  logger.info("[startup] database reachable", { component: "startup", step: "db_ok" });
 
   if (config.allowedTelegramIds.length === 0) {
-    console.warn(
-      "[startup] WARNING: ALLOWED_TELEGRAM_IDS is empty - the bot will respond to ANYONE. Set it in .env.",
+    logger.warn(
+      "[startup] ALLOWED_TELEGRAM_IDS is empty - the bot will respond to ANYONE. Set it in .env.",
+      { component: "startup" },
     );
   }
 
@@ -29,16 +33,22 @@ async function main(): Promise<void> {
       httpServer!.listen(config.httpPort, () => resolve());
       httpServer!.once("error", reject);
     });
-    console.log(`[startup] OAuth HTTP server listening on port ${config.httpPort}.`);
+    logger.info("[startup] OAuth HTTP server listening", {
+      component: "startup",
+      step: "http_listen",
+      port: config.httpPort,
+    });
   } else {
-    console.log("[startup] Gmail OAuth not configured — Gmail connect disabled.");
+    logger.info("[startup] Gmail OAuth not configured — Gmail connect disabled", {
+      component: "startup",
+    });
   }
 
   const bot = createBot();
   const retentionTimer = scheduleExportRetention();
 
   const shutdown = async (signal: string) => {
-    console.log(`[shutdown] received ${signal}, stopping...`);
+    logger.info("[shutdown] received signal, stopping...", { component: "shutdown", signal });
     if (retentionTimer) clearInterval(retentionTimer);
     bot.stop(signal);
     if (httpServer) {
@@ -51,18 +61,18 @@ async function main(): Promise<void> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
-  console.log("[startup] launching Telegram bot...");
+  logger.info("[startup] launching Telegram bot...", { component: "startup", step: "bot_launch" });
   // bot.launch() resolves only when the bot stops, so we don't await it here.
   bot.launch().catch(async (err) => {
-    console.error("[fatal] bot stopped with error:", err);
+    logger.exception("[fatal] bot stopped with error", err, { component: "startup" });
     await shutdownTelemetry();
     process.exit(1);
   });
-  console.log("[startup] bot is running.");
+  logger.info("[startup] bot is running", { component: "startup", step: "bot_running" });
 }
 
 main().catch(async (err) => {
-  console.error("[fatal] failed to start:", err);
+  logger.exception("[fatal] failed to start", err, { component: "startup" });
   await shutdownTelemetry();
   process.exit(1);
 });

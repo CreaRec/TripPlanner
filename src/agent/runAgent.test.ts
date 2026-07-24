@@ -180,10 +180,10 @@ describe("runAgent", () => {
 
     const result = await runAgent(111, "go");
     expect(result.reply).toBe("Sorry, that failed.");
-    expect(consoleError).toHaveBeenCalledWith("[agent] tool call failed", {
-      tool: "create_trip",
-      error: "boom",
-    });
+    expect(consoleError).toHaveBeenCalled();
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain("[agent] tool call failed");
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain("create_trip");
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain("boom");
     consoleError.mockRestore();
   });
 

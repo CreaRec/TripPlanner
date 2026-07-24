@@ -12,6 +12,7 @@ import {
 } from "../services/gmail/gmailIntents";
 import { formatGmailExportSuccessMessage } from "../services/gmail/gmailExport";
 import { exportGmailBySearchIndex } from "../services/gmail/gmailSearchSession";
+import { logger } from "../log";
 import {
   markUpdateError,
   markUpdateSkipped,
@@ -38,7 +39,11 @@ async function sendAgentResult(
       }
     } catch (err) {
       failedFiles += 1;
-      console.error("[bot] failed to send file:", file, err);
+      logger.exception("[bot] failed to send file", err, {
+        component: "bot",
+        step: "send_file",
+        file_kind: file.toLowerCase().endsWith(".png") ? "png" : "document",
+      });
     }
   }
 
@@ -54,6 +59,14 @@ async function sendAgentResult(
   if (reply) {
     await ctx.reply(reply);
   }
+
+  logger.info("[bot] agent result sent", {
+    component: "bot",
+    step: "reply_sent",
+    file_count: result.files.length,
+    failed_files: failedFiles,
+    has_reply: Boolean(reply),
+  });
 }
 
 async function replyDirectGmailExport(
@@ -80,7 +93,12 @@ async function replyDirectGmailExport(
       await ctx.reply("Gmail-аккаунт для этого письма недоступен. Подключите почту заново.");
       return true;
     }
-    console.error("[bot] direct gmail export failed:", result.message);
+    logger.error("[bot] direct gmail export failed", {
+      component: "bot",
+      handler: "gmail_export",
+      step: "export_failed",
+      error_message: result.message,
+    });
     await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
     return true;
   }
@@ -91,7 +109,11 @@ async function replyDirectGmailExport(
       await ctx.replyWithDocument({ source: filePath });
     } catch (err) {
       failedFiles += 1;
-      console.error("[bot] failed to send exported gmail file:", filePath, err);
+      logger.exception("[bot] failed to send exported gmail file", err, {
+        component: "bot",
+        handler: "gmail_export",
+        step: "send_file",
+      });
     }
   }
 
@@ -144,14 +166,17 @@ export function createBot(): Telegraf {
   });
 
   bot.catch((err, ctx) => {
-    console.error("[bot] unhandled error:", err);
-    // Metrics/logs for propagated errors are recorded by telemetryMiddleware.
+    logger.exception("[bot] unhandled error", err, { component: "bot", step: "catch" });
+    // Metrics for propagated errors are recorded by telemetryMiddleware.
     const message =
       err instanceof Error && err.name === "TimeoutError"
         ? "Запрос занял слишком много времени. Попробуйте ещё раз."
         : "Something went wrong. Please try again.";
     void ctx.reply(message).catch((replyErr) => {
-      console.error("[bot] failed to send error reply:", replyErr);
+      logger.exception("[bot] failed to send error reply", replyErr, {
+        component: "bot",
+        step: "error_reply",
+      });
     });
   });
 
@@ -167,6 +192,12 @@ export function createBot(): Telegraf {
     const allowed = config.allowedTelegramIds;
     if (allowed.length > 0 && !allowed.includes(from.id)) {
       markUpdateSkipped(ctx, "auth");
+      logger.info("[bot] unauthorized user rejected", {
+        component: "bot",
+        handler: "auth",
+        result: "skipped",
+        step: "auth_reject",
+      });
       await ctx.reply("Sorry, you are not authorized to use this bot.");
       return;
     }
@@ -177,6 +208,7 @@ export function createBot(): Telegraf {
 
   bot.start(async (ctx) => {
     setUpdateHandler(ctx, "start");
+    logger.info("[bot] /start", { component: "bot", handler: "start", step: "reply" });
     await ctx.reply(
       [
         "Hi! I'm your trip planner.",
@@ -190,6 +222,7 @@ export function createBot(): Telegraf {
 
   bot.help(async (ctx) => {
     setUpdateHandler(ctx, "help");
+    logger.info("[bot] /help", { component: "bot", handler: "help", step: "reply" });
     await ctx.reply(
       [
         "Talk to me in plain language to plan a trip.",
@@ -220,6 +253,11 @@ export function createBot(): Telegraf {
       return;
     }
     try {
+      logger.info("[bot] starting gmail connect flow", {
+        component: "bot",
+        handler: "gmail_connect",
+        step: "oauth_start",
+      });
       const url = await startConnectFlow(ctx.from.id);
       await ctx.reply(
         [
@@ -230,7 +268,6 @@ export function createBot(): Telegraf {
         ].join("\n"),
       );
     } catch (err) {
-      console.error("[bot] connect gmail error:", err);
       markUpdateError(ctx, err, { errorType: "unknown", handler: "gmail_connect" });
       await ctx.reply("Could not start Gmail connection. Please try again.");
     }
@@ -238,6 +275,7 @@ export function createBot(): Telegraf {
 
   bot.on(message("photo"), async (ctx) => {
     setUpdateHandler(ctx, "photo");
+    logger.info("[bot] photo received", { component: "bot", handler: "photo", step: "received" });
     await ctx.sendChatAction("typing");
     try {
       const photo = ctx.message.photo.at(-1);
@@ -246,19 +284,34 @@ export function createBot(): Telegraf {
         return;
       }
       const image = await downloadTelegramFile(ctx, photo.file_id);
+      logger.info("[bot] photo downloaded", {
+        component: "bot",
+        handler: "photo",
+        step: "downloaded",
+        bytes: image.byteLength,
+      });
       const extracted = await extractTravelInfoFromImage({
         image,
         mimeType: "image/jpeg",
         caption: ctx.message.caption,
       });
       if (!extracted || extracted === "NO_TRAVEL_INFO") {
+        logger.info("[bot] photo had no travel info", {
+          component: "bot",
+          handler: "photo",
+          step: "no_travel_info",
+        });
         await ctx.reply("I couldn't find travel details in that image. Try a clearer photo or type the details.");
         return;
       }
+      logger.info("[bot] photo extracted; running agent", {
+        component: "bot",
+        handler: "photo",
+        step: "agent",
+      });
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] image parsing error:", err);
       markUpdateError(ctx, err, { handler: "photo" });
       await ctx.reply("I couldn't parse that image. Please try a clearer photo or type the details.");
     }
@@ -269,10 +322,22 @@ export function createBot(): Telegraf {
     const document = ctx.message.document;
     const mimeType = document.mime_type ?? "";
     if (!mimeType.startsWith("image/")) {
+      logger.info("[bot] unsupported document type", {
+        component: "bot",
+        handler: "document",
+        step: "reject_mime",
+        mime_type: mimeType || "unknown",
+      });
       await ctx.reply("I can parse image files, but not that document type yet. Please send a photo or image file.");
       return;
     }
 
+    logger.info("[bot] image document received", {
+      component: "bot",
+      handler: "document",
+      step: "received",
+      mime_type: mimeType,
+    });
     await ctx.sendChatAction("typing");
     try {
       const image = await downloadTelegramFile(ctx, document.file_id);
@@ -282,13 +347,22 @@ export function createBot(): Telegraf {
         caption: ctx.message.caption,
       });
       if (!extracted || extracted === "NO_TRAVEL_INFO") {
+        logger.info("[bot] document had no travel info", {
+          component: "bot",
+          handler: "document",
+          step: "no_travel_info",
+        });
         await ctx.reply("I couldn't find travel details in that image. Try a clearer image or type the details.");
         return;
       }
+      logger.info("[bot] document extracted; running agent", {
+        component: "bot",
+        handler: "document",
+        step: "agent",
+      });
       const result = await runAgent(ctx.from.id, imagePromptFromExtraction(extracted, ctx.message.caption));
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] image parsing error:", err);
       markUpdateError(ctx, err, { handler: "document" });
       await ctx.reply("I couldn't parse that image. Please try a clearer image or type the details.");
     }
@@ -298,6 +372,12 @@ export function createBot(): Telegraf {
     const text = ctx.message.text;
     if (text.startsWith("/")) {
       markUpdateSkipped(ctx, "command");
+      logger.info("[bot] unknown command skipped", {
+        component: "bot",
+        handler: "command",
+        result: "skipped",
+        step: "ignore_command",
+      });
       return; // unknown command; ignore
     }
 
@@ -309,14 +389,31 @@ export function createBot(): Telegraf {
     const exportRequest = parseExportGmailByNumberRequest(text);
     if (exportRequest !== null) {
       setUpdateHandler(ctx, "gmail_export");
+      logger.info("[bot] gmail export by index", {
+        component: "bot",
+        handler: "gmail_export",
+        step: "start",
+        force_refresh: Boolean(exportRequest.forceRefresh),
+      });
       await ctx.sendChatAction("upload_document");
       try {
         const handled = await replyDirectGmailExport(ctx, exportRequest.index, {
           forceRefresh: exportRequest.forceRefresh,
         });
-        if (handled) return;
+        if (handled) {
+          logger.info("[bot] gmail export handled", {
+            component: "bot",
+            handler: "gmail_export",
+            step: "done",
+          });
+          return;
+        }
+        logger.info("[bot] gmail export fell through to agent", {
+          component: "bot",
+          handler: "gmail_export",
+          step: "fallback_agent",
+        });
       } catch (err) {
-        console.error("[bot] direct gmail export error:", err);
         markUpdateError(ctx, err, { handler: "gmail_export" });
         await ctx.reply("Не удалось экспортировать письмо. Попробуйте ещё раз.");
         return;
@@ -324,6 +421,12 @@ export function createBot(): Telegraf {
     }
 
     setUpdateHandler(ctx, "agent");
+    logger.info("[bot] routing to agent", {
+      component: "bot",
+      handler: "agent",
+      step: "start",
+      text_chars: text.length,
+    });
     await ctx.sendChatAction("typing");
     const typingTimer = setInterval(() => {
       void ctx.sendChatAction("typing");
@@ -332,7 +435,6 @@ export function createBot(): Telegraf {
       const result = await runAgent(ctx.from.id, text);
       await sendAgentResult(ctx, result);
     } catch (err) {
-      console.error("[bot] agent error:", err);
       markUpdateError(ctx, err, { handler: "agent" });
       await ctx.reply("Something went wrong while planning. Please try again.");
     } finally {

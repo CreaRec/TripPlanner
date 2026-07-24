@@ -1,4 +1,5 @@
 import { config, isExportStorageConfigured } from "../../config";
+import { logger } from "../../log";
 import { deleteExportObjects, listExportObjects } from "./exportStorage";
 
 export interface RetentionRunResult {
@@ -77,14 +78,17 @@ export function scheduleExportRetention(
     void run()
       .then((result) => {
         if (result && (result.deletedByAge > 0 || result.deletedBySize > 0)) {
-          console.log(
-            `[export-retention] deleted ${result.deletedByAge} by age, ${result.deletedBySize} by size; ` +
-              `${result.remainingCount} objects (${Math.round(result.remainingBytes / (1024 * 1024))} MB) remain`,
-          );
+          logger.info("[export-retention] cleaned objects", {
+            component: "export_retention",
+            deleted_by_age: result.deletedByAge,
+            deleted_by_size: result.deletedBySize,
+            remaining_count: result.remainingCount,
+            remaining_mb: Math.round(result.remainingBytes / (1024 * 1024)),
+          });
         }
       })
       .catch((err) => {
-        console.error("[export-retention] failed:", err);
+        logger.exception("[export-retention] failed", err, { component: "export_retention" });
       });
   };
 

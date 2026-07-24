@@ -16,6 +16,7 @@ import {
 } from "../services/gmail/gmailClient";
 import { upsertAccount } from "../services/gmail/gmailAccounts";
 import { buildOAuthStartUrl } from "../services/gmail/gmailUrls";
+import { logger } from "../log";
 
 function htmlPage(title: string, body: string): string {
   return `<!DOCTYPE html>
@@ -130,6 +131,11 @@ async function handleGoogleCallback(
     const tokens = await exchangeCodeForTokens(code);
     const googleEmail = await fetchGoogleEmail(tokens.accessToken);
     await upsertAccount(consumed.telegramId, googleEmail, tokens);
+    logger.info("[oauth] account connected", {
+      component: "http",
+      handler: "oauth_callback",
+      step: "connected",
+    });
     sendHtml(
       res,
       200,
@@ -140,7 +146,11 @@ async function handleGoogleCallback(
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[oauth] callback failed:", message);
+    logger.exception("[oauth] callback failed", err, {
+      component: "http",
+      handler: "oauth_callback",
+      step: "failed",
+    });
     sendHtml(
       res,
       500,
@@ -156,6 +166,8 @@ export function createHttpServer(): Server {
 
   const server = createServer((req, res) => {
     void (async () => {
+      const started = process.hrtime.bigint();
+      let route = "unknown";
       try {
         if (!req.url) {
           sendText(res, 400, "Bad request");
@@ -165,25 +177,48 @@ export function createHttpServer(): Server {
         const host = req.headers.host ?? `localhost:${config.httpPort}`;
         const url = new URL(req.url, `http://${host}`);
         const path = url.pathname;
+        route = `${req.method ?? "GET"} ${path}`;
 
         if (req.method === "GET" && path === "/health") {
           sendText(res, 200, "ok");
           return;
         }
 
+        logger.info("[http] request", {
+          component: "http",
+          step: "start",
+          route,
+        });
+
         if (req.method === "GET" && path === "/oauth/google/start") {
           await handleGoogleStart(url, res);
+          logger.info("[http] request finished", {
+            component: "http",
+            step: "finish",
+            route,
+            duration_ms: Math.round(Number(process.hrtime.bigint() - started) / 1e6),
+          });
           return;
         }
 
         if (req.method === "GET" && path === "/oauth/google/callback") {
           await handleGoogleCallback(url, res);
+          logger.info("[http] request finished", {
+            component: "http",
+            step: "finish",
+            route,
+            duration_ms: Math.round(Number(process.hrtime.bigint() - started) / 1e6),
+          });
           return;
         }
 
         sendText(res, 404, "Not found");
       } catch (err) {
-        console.error("[http] request failed:", err);
+        logger.exception("[http] request failed", err, {
+          component: "http",
+          step: "failed",
+          route,
+        });
         sendText(res, 500, "Internal server error");
       }
     })();
@@ -198,5 +233,10 @@ export async function startConnectFlow(telegramId: number): Promise<string> {
   if (!config.publicAppUrl) {
     throw new Error("PUBLIC_APP_URL is not configured.");
   }
+  logger.info("[oauth] connect flow created", {
+    component: "http",
+    handler: "oauth_start",
+    step: "state_created",
+  });
   return buildOAuthStartUrl(state, config.publicAppUrl);
 }

@@ -762,10 +762,9 @@ describe("general interesting places", () => {
         ],
       }),
     );
-    expect(consoleError).toHaveBeenCalledWith(
-      "[static-maps] route comparison map failed",
-      expect.objectContaining({ placeId: 77 }),
-    );
+    expect(consoleError).toHaveBeenCalled();
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain("[static-maps] route comparison map failed");
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain("413");
     consoleError.mockRestore();
   });
 

@@ -23,6 +23,7 @@ import {
 import type { SavedPlace } from "../../services/places/savedPlaces";
 import { suggestSavedPlacesOnRoute } from "../../services/providers/googleRoutes";
 import { generateRouteComparisonMap, isStaticMapsConfigured } from "../../services/providers/staticMaps";
+import { logger } from "../../log";
 import type OpenAI from "openai";
 import type { ToolHandler } from "./context";
 import {
@@ -623,9 +624,9 @@ export const placesToolHandlers: Record<string, ToolHandler> = {
             mapFiles.set(suggestion.place.id, file);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error("[static-maps] route comparison map failed", {
-              placeId: suggestion.place.id,
-              error: message,
+            logger.exception("[static-maps] route comparison map failed", err, {
+              component: "static_maps",
+              step: "route_comparison",
             });
             mapErrors.set(suggestion.place.id, message);
           }
