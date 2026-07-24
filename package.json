@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
-    "@crearec/otel": "0.0.2",
+    "@crearec/otel": "^0.0.2",
     "@opentelemetry/api": "^1.9.1",
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
